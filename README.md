@@ -1,6 +1,6 @@
 # OhMyMeme Android
 
-轻量化表情包管理系统的安卓端 — 与桌面端（[OhMyMeme](https://github.com/TNTXZ/OhMyMeme)）存储结构一致，便于多端同步。
+轻量化表情包管理系统的安卓端 — 与桌面端（[OhMyMeme](https://github.com/OhMyMeme/OhMyMeme)）存储结构一致，便于多端同步。
 
 ## 功能
 
