@@ -1,0 +1,148 @@
+<resources>
+    <string name="app_name">OhMyMeme</string>
+    <string name="search_hint">搜索表情包...</string>
+    <string name="action_import">导入</string>
+    <string name="refresh">刷新</string>
+    <string name="settings">设置</string>
+    <string name="developing">功能开发中...</string>
+    <string name="storage_title">选择表情包存储位置</string>
+    <string name="storage_message">表情包、数据库和缩略图将保存在所选位置。默认使用应用专属目录，无需存储权限。</string>
+    <string name="storage_use_default">使用默认位置</string>
+    <string name="storage_pick_custom">选择其他位置</string>
+    <string name="storage_pick_failed">所选位置不可用，已使用默认位置</string>
+    <string name="import_done">已导入 %1$d 个表情包</string>
+    <string name="scan_done">缓存扫描完成，新增 %1$d 个</string>
+    <string name="empty_title">还没有表情包</string>
+    <string name="empty_hint">点击「导入」添加</string>
+
+    <string name="badge_gif">GIF</string>
+    <string name="badge_webp">WebP</string>
+    <string name="badge_stego">隐写导入</string>
+
+    <string name="ctx_rename">重命名</string>
+    <string name="ctx_favorite">收藏</string>
+    <string name="ctx_unfavorite">取消收藏</string>
+    <string name="ctx_add_collection">添加分组</string>
+    <string name="ctx_remove_collection">从分组移除</string>
+    <string name="ctx_remove_recent">从最近使用中删除</string>
+    <string name="ctx_delete">删除</string>
+    <string name="rename_dialog_title">重命名</string>
+    <string name="rename_hint">输入新名称</string>
+    <string name="add_collection_dialog_title">添加分组</string>
+    <string name="add_collection_hint">输入分组名称</string>
+    <string name="collection_favorites">收藏夹</string>
+    <string name="collection_recent">最近使用</string>
+    <string name="delete_confirm_title">删除确认</string>
+    <string name="delete_confirm_message">确定删除「%1$s」？此操作不可恢复。</string>
+    <string name="ok">确定</string>
+    <string name="cancel">取消</string>
+    <string name="favorited">已收藏</string>
+    <string name="unfavorited">已取消收藏</string>
+    <string name="added_to_collection">已添加到分组：%1$s</string>
+    <string name="removed_from_recent">已从最近使用中删除</string>
+    <string name="removed_from_collection">已从分组移除</string>
+    <string name="deleted">已删除</string>
+    <string name="delete_failed">删除失败</string>
+    <string name="renamed">已重命名</string>
+    <string name="rename_failed">重命名失败</string>
+    <string name="input_empty">名称不能为空</string>
+
+    <string name="settings_title">OhMyMeme 设置</string>
+    <string name="back">返回</string>
+    <string name="gif_section">动图</string>
+    <string name="gif_auto_play">动图自动播放</string>
+
+    <string name="copy_process_title">复制处理</string>
+    <string name="copy_process_label">复制超限静态图时</string>
+    <string name="copy_mode_0">不处理，直接复制原图</string>
+    <string name="copy_mode_1">缩放为 WebP</string>
+    <string name="copy_mode_2">转换为 GIF</string>
+    <string name="copy_mode_3">转换为 GIF 并隐写原图（可无损还原）</string>
+    <string name="copy_process_hint">复制超过尺寸上限的静态图时按此处模式处理；动图不受影响。隐写模式会把原图信息随 GIF 隐藏，接收方可运行解码工具还原，但会显著增大文件体积。</string>
+
+    <string name="sync_title">云端同步</string>
+    <string name="sync_auto_fetch">启动时自动获取远端索引</string>
+    <string name="sync_auto_sync">启动时自动同步</string>
+    <string name="sync_storage_type">存储类型</string>
+    <string name="sync_type_none">无</string>
+    <string name="sync_type_ftp">FTP</string>
+    <string name="sync_type_s3">S3 兼容存储</string>
+    <string name="sync_type_r2">Cloudflare R2</string>
+    <string name="sync_type_webdav">WebDAV</string>
+    <string name="sync_delete_remote">上传时删除远端文件</string>
+    <string name="sync_remove_local">下载时删除本地多余文件</string>
+    <string name="sync_hide_upload_warn">上传前不再提醒</string>
+    <string name="show_upload_progress">上传时显示进度条</string>
+    <string name="show_upload_done">上传完毕显示提示</string>
+    <string name="show_download_progress">下载时显示进度条</string>
+    <string name="show_download_done">下载完毕显示提示</string>
+
+    <string name="ftp_host">FTP 服务器</string>
+    <string name="ftp_port">端口</string>
+    <string name="ftp_user">用户名</string>
+    <string name="ftp_password">密码</string>
+    <string name="remote_path">远程路径</string>
+    <string name="s3_endpoint">Endpoint URL</string>
+    <string name="s3_region">Region</string>
+    <string name="s3_bucket">Bucket</string>
+    <string name="s3_access_key">Access Key</string>
+    <string name="s3_secret_key">Secret Key</string>
+    <string name="path_prefix_opt">路径前缀（可选）</string>
+    <string name="r2_account_id">Cloudflare Account ID</string>
+    <string name="r2_access_key_id">R2 Access Key ID</string>
+    <string name="r2_secret_access_key">R2 Secret Access Key</string>
+    <string name="bucket_name">Bucket 名称</string>
+    <string name="webdav_url">WebDAV URL</string>
+    <string name="webdav_user">用户名</string>
+    <string name="webdav_password">密码</string>
+    <string name="webdav_path_opt">远程路径（可选）</string>
+
+    <string name="btn_test_connection">测试连接</string>
+    <string name="btn_check_sync_status">检查同步状态</string>
+    <string name="btn_sync_push">上传到远端</string>
+    <string name="btn_sync_pull">从远端下载</string>
+    <string name="sync_testing">测试连接中...</string>
+    <string name="sync_checking">检查同步状态中...</string>
+    <string name="sync_pushing">上传中...</string>
+    <string name="sync_pulling">下载中...</string>
+
+    <string name="version_title">版本更新</string>
+    <string name="current_version">当前版本: %1$s</string>
+    <string name="btn_check_update">检查更新</string>
+    <string name="checking_update">检查中...</string>
+    <string name="already_latest">已是最新版本</string>
+    <string name="update_available">发现新版本</string>
+    <string name="update_message">新版本 v%1$s（当前 v%2$s），是否前往下载？</string>
+    <string name="update_download">下载</string>
+    <string name="update_later">稍后</string>
+    <string name="update_no_url">未找到下载地址</string>
+
+    <string name="danger_title">危险操作</string>
+    <string name="danger_note">以下操作不可撤销，请谨慎使用</string>
+    <string name="danger_delete_local">删除本地所有表情包</string>
+    <string name="danger_delete_cloud">删除云端所有表情包</string>
+
+    <string name="log_title">日志</string>
+    <string name="log_note">导出本次运行至今的 Debug 级日志，便于排查问题</string>
+    <string name="btn_export_logs">导出日志</string>
+
+    <string name="btn_reset">恢复默认</string>
+    <string name="btn_save">保存</string>
+    <string name="config_saved">已保存</string>
+    <string name="config_reset">已恢复默认设置</string>
+
+    <string-array name="copy_mode_options">
+        <item>@string/copy_mode_0</item>
+        <item>@string/copy_mode_1</item>
+        <item>@string/copy_mode_2</item>
+        <item>@string/copy_mode_3</item>
+    </string-array>
+
+    <string-array name="sync_type_options">
+        <item>@string/sync_type_none</item>
+        <item>@string/sync_type_ftp</item>
+        <item>@string/sync_type_s3</item>
+        <item>@string/sync_type_r2</item>
+        <item>@string/sync_type_webdav</item>
+    </string-array>
+</resources>

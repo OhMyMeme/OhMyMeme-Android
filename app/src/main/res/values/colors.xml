@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0D0D0F</color>
+    <color name="surface">#151517</color>
+    <color name="surface_2">#1A1A1D</color>
+    <color name="card">#1E1E22</color>
+    <color name="card_hover">#25252A</color>
+    <color name="border">#2A2A2F</color>
+    <color name="border_light">#333338</color>
+    <color name="fg">#E4E4E7</color>
+    <color name="fg_secondary">#A1A1AA</color>
+    <color name="muted">#71717A</color>
+    <color name="accent">#3B82F6</color>
+    <color name="accent_hover">#60A5FA</color>
+    <color name="accent_muted">#121926</color>
+    <color name="danger">#EF4444</color>
+    <color name="blue_500">#4A9EFF</color>
+    <color name="text_gray">#8A8A8A</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
