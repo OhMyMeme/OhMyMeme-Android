@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/act_rename"
+        android:title="@string/ctx_rename" />
+    <item
+        android:id="@+id/act_favorite"
+        android:title="@string/ctx_favorite" />
+    <item
+        android:id="@+id/act_add_collection"
+        android:title="@string/ctx_add_collection" />
+    <item
+        android:id="@+id/act_remove_collection"
+        android:title="@string/ctx_remove_collection" />
+    <item
+        android:id="@+id/act_remove_recent"
+        android:title="@string/ctx_remove_recent" />
+    <item
+        android:id="@+id/act_delete"
+        android:title="@string/ctx_delete" />
+</menu>

@@ -11,6 +11,13 @@ object UpdateChecker {
     private const val REPO = "OhMyMeme/OhMyMeme-Android"
     private const val GITHUB_LATEST = "https://api.github.com/repos/$REPO/releases/latest"
 
+    private val GH_MIRRORS = listOf(
+        "https://github.dpik.top/",
+        "https://gh.dpik.top/",
+        "https://gh-proxy.org/",
+        "https://proxy.starsfire.top/-----"
+    )
+
     data class UpdateInfo(
         val latest: String,
         val downloadUrl: String,
@@ -78,6 +85,36 @@ object UpdateChecker {
             Pair(tag, apkUrl.ifEmpty { html })
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * 依次探测镜像源，返回第一个可访问的下载地址；全部失败回退直连。
+     * 桌面端 updater.py `_urlretrieve_mirror` 迁移：仅探测连通性（HEAD），
+     * 实际下载交给系统下载管理器/浏览器。
+     */
+    fun mirrorDownloadUrl(url: String): String {
+        if (url.isEmpty()) return url
+        if (!url.startsWith("https://github.com/")) return url
+        for (mirror in GH_MIRRORS) {
+            val candidate = mirror + url
+            if (reachable(candidate)) return candidate
+        }
+        return url
+    }
+
+    private fun reachable(url: String): Boolean {
+        return try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "HEAD"
+            conn.setRequestProperty("User-Agent", "OhMyMeme-Android")
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+            val code = conn.responseCode
+            conn.disconnect()
+            code in 200..399
+        } catch (e: Exception) {
+            false
         }
     }
 }

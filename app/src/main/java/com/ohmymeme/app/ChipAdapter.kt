@@ -11,11 +11,14 @@ enum class ChipStyle {
     COLLECTION
 }
 
-class ChipAdapter(
+class ChipAdapter<T>(
     private val style: ChipStyle,
-    private val items: List<String>,
-    private val activeItems: Set<String> = emptySet()
+    private val items: List<T>,
+    private val activeItems: Set<T>,
+    private val label: (T) -> String
 ) : RecyclerView.Adapter<ChipAdapter.ChipViewHolder>() {
+
+    var onItemClick: ((T) -> Unit)? = null
 
     class ChipViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 
@@ -26,8 +29,9 @@ class ChipAdapter(
     }
 
     override fun onBindViewHolder(holder: ChipViewHolder, position: Int) {
-        val text = items[position]
-        val active = activeItems.contains(text)
+        val item = items[position]
+        val text = label(item)
+        val active = activeItems.contains(item)
         val chip = holder.itemView.findViewById<TextView>(
             if (style == ChipStyle.TAG) R.id.tv_chip else R.id.tv_collection_chip
         )
@@ -41,6 +45,7 @@ class ChipAdapter(
                 else -> R.drawable.bg_collection_chip
             }
         )
+        holder.itemView.setOnClickListener { onItemClick?.invoke(item) }
     }
 
     override fun getItemCount() = items.size

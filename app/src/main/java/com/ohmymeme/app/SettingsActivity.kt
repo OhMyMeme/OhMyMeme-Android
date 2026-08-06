@@ -15,6 +15,7 @@ import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 
@@ -43,7 +44,17 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setupBack() {
-        findViewById<View>(R.id.btn_back).setOnClickListener { finish() }
+        findViewById<View>(R.id.btn_back).setOnClickListener { finishWithResult() }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                finishWithResult()
+            }
+        })
+    }
+
+    private fun finishWithResult() {
+        setResult(RESULT_OK)
+        finish()
     }
 
     private fun setupSpinners() {
@@ -86,6 +97,13 @@ class SettingsActivity : AppCompatActivity() {
         if (selected >= 0) groups[selected].visibility = View.VISIBLE
     }
 
+    private val syncTypes = listOf("", "ftp", "s3", "r2", "webdav")
+
+    private fun syncTypePosition(type: String): Int {
+        val idx = syncTypes.indexOf(type)
+        return if (idx >= 0) idx else 0
+    }
+
     private fun setupVersion() {
         findViewById<TextView>(R.id.tv_version).text =
             getString(R.string.current_version, currentVersionName())
@@ -109,6 +127,7 @@ class SettingsActivity : AppCompatActivity() {
         val cfg = ConfigStore.get(this)
         findViewById<SwitchMaterial>(R.id.sw_gif).isChecked = cfg.optBoolean("auto_play_gif", true)
         findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 1))
+        findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
             cfg.optBoolean("sync_auto_fetch_index", false)
         findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked =
@@ -161,18 +180,81 @@ class SettingsActivity : AppCompatActivity() {
             loadConfig()
             toast(getString(R.string.config_reset))
         }
-        val developing = getString(R.string.developing)
-        val buttons = listOf(
-            findViewById<TextView>(R.id.btn_test_connection),
-            findViewById<TextView>(R.id.btn_check_sync_status),
-            findViewById<TextView>(R.id.btn_sync_push),
-            findViewById<TextView>(R.id.btn_sync_pull),
-            findViewById<TextView>(R.id.btn_danger_local),
-            findViewById<TextView>(R.id.btn_danger_cloud),
-            findViewById<TextView>(R.id.btn_export_logs)
-        )
-        buttons.forEach { it.setOnClickListener { toast(developing) } }
+        findViewById<TextView>(R.id.btn_test_connection).setOnClickListener { runSync(R.string.sync_testing) { CloudSync.syncTest(this) } }
+        findViewById<TextView>(R.id.btn_check_sync_status).setOnClickListener { runSync(R.string.sync_checking) { CloudSync.checkSyncStatus(this) } }
+        findViewById<TextView>(R.id.btn_sync_push).setOnClickListener { runSync(R.string.sync_pushing) { CloudSync.push(this) } }
+        findViewById<TextView>(R.id.btn_sync_pull).setOnClickListener { runSync(R.string.sync_pulling) { CloudSync.pull(this) } }
+        findViewById<TextView>(R.id.btn_danger_local).setOnClickListener { confirmDeleteLocal() }
+        findViewById<TextView>(R.id.btn_danger_cloud).setOnClickListener { confirmDeleteCloud() }
+        findViewById<TextView>(R.id.btn_export_logs).setOnClickListener { toast(getString(R.string.developing)) }
         findViewById<TextView>(R.id.btn_check_update).setOnClickListener { checkUpdate() }
+    }
+
+    private fun runSync(progressRes: Int, block: () -> Any) {
+        saveConfig()
+        val btn = findViewById<TextView>(R.id.btn_sync_push)
+        val original = btn.text.toString()
+        btn.isEnabled = false
+        btn.text = getString(progressRes)
+        Thread {
+            val result = try {
+                block()
+            } catch (e: Exception) {
+                e.message ?: "sync failed"
+            }
+            runOnUiThread {
+                btn.isEnabled = true
+                btn.text = original
+                when (result) {
+                    is String -> toast(result)
+                    is CloudSync.SyncResult -> toast(syncSummary(result))
+                    else -> toast(result.toString())
+                }
+            }
+        }.start()
+    }
+
+    private fun syncSummary(r: CloudSync.SyncResult): String {
+        val parts = mutableListOf<String>()
+        if (r.uploaded > 0) parts.add("上传 ${r.uploaded}")
+        if (r.downloaded > 0) parts.add("下载 ${r.downloaded}")
+        if (r.skipped > 0) parts.add("跳过 ${r.skipped}")
+        if (r.deleted > 0) parts.add("删除 ${r.deleted}")
+        if (r.removedLocal > 0) parts.add("移除本地 ${r.removedLocal}")
+        if (r.errors > 0) parts.add("失败 ${r.errors}")
+        val base = if (parts.isEmpty()) "同步完成" else "同步完成：" + parts.joinToString("，")
+        if (r.failed.isNotEmpty()) {
+            return base + "\n" + r.failed.take(5).joinToString("，")
+        }
+        return base
+    }
+
+    private fun confirmDeleteLocal() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.danger_title))
+            .setMessage(getString(R.string.danger_delete_local))
+            .setPositiveButton(getString(R.string.ctx_delete)) { _, _ ->
+                runSync(R.string.sync_testing) {
+                    val n = CloudSync.deleteAllLocal(this)
+                    "已删除本地 $n 个表情包"
+                }
+            }
+            .setNegativeButton(getString(R.string.update_later), null)
+            .show()
+    }
+
+    private fun confirmDeleteCloud() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.danger_title))
+            .setMessage(getString(R.string.danger_delete_cloud))
+            .setPositiveButton(getString(R.string.ctx_delete)) { _, _ ->
+                runSync(R.string.sync_testing) {
+                    val (ok, msg) = CloudSync.deleteAllRemote(this)
+                    if (ok) msg else "删除失败：$msg"
+                }
+            }
+            .setNegativeButton(getString(R.string.update_later), null)
+            .show()
     }
 
     private fun checkUpdate() {
@@ -200,7 +282,7 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle(getString(R.string.update_available))
             .setMessage(getString(R.string.update_message, info.latest, currentVersionName()))
             .setPositiveButton(getString(R.string.update_download)) { _, _ ->
-                openBrowser(info.downloadUrl)
+                openBrowser(UpdateChecker.mirrorDownloadUrl(info.downloadUrl))
             }
             .setNegativeButton(getString(R.string.update_later), null)
             .show()
@@ -223,6 +305,7 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "copy_resize_mode", findViewById<Spinner>(R.id.sp_copy_mode).selectedItemPosition)
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
+        ConfigStore.set(this, "sync_type", syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition])
         ConfigStore.set(this, "sync_delete_remote", findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked)
         ConfigStore.set(this, "sync_remove_local", findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked)
         ConfigStore.set(this, "sync_hide_upload_warning", findViewById<SwitchMaterial>(R.id.sw_hide_upload_warn).isChecked)

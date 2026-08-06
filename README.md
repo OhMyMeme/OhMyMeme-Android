@@ -9,10 +9,13 @@
 - **缓存扫描** — 启动/手动刷新时扫描缓存目录，已有文件自动注册到数据库（文件名 + 哈希双重去重）
 - **缩略图** — 懒生成缩略图到 `thumbnails/{meme_id}_{size}.png`，网格加载
 - **本地数据库** — SQLite (WAL)，7 表 schema 与桌面端 `src/database.py` 完全一致（memes/tags/meme_tags/collections/meme_collections/favorites/recent_uses）
-- **搜索** — 关键词实时筛选（按文件名/原始名），标签/分组胶囊可叠加过滤
+- **搜索** — 关键词实时筛选（按文件名/原始名），标签可多选叠加、分组/收藏夹/最近使用胶囊过滤（分组带数量），与桌面端 `search_memes` 一致
 - **设置** — 动图开关、复制处理模式、云端同步（FTP/S3/R2/WebDAV）凭据、版本信息、危险操作；保存/恢复默认已接真实配置（密钥字段用 Android Keystore 加密存储）
 - **配置加密** — `config.json` 中的密钥字段（s3_secret_key 等）经 Android Keystore AES-GCM 加密后落盘
-- **版本更新检查** — 设置页「检查更新」查询 GitHub Releases（`OhMyMeme/OhMyMeme-Android`），发现新版本弹窗引导下载 APK
+- **版本更新检查** — 设置页「检查更新」查询 GitHub Releases（`OhMyMeme/OhMyMeme-Android`），发现新版本弹窗引导下载 APK；下载地址按桌面端镜像列表依次探测可用镜像（github.dpik.top / gh.dpik.top / gh-proxy.org / proxy.starsfire.top），失败回退 GitHub 直连
+- **云端同步** — 设置页选择 FTP / S3 / R2 / WebDAV 任一后端，配置凭据后可「测试连接 / 检查同步状态 / 上传到远端 / 从远端下载」；远端目录结构与桌面端一致（`memes/` 文件 + `meme-index.json` 清单 v3），SHA-256 比对跳过已同步文件，上传可删除远端多余文件、下载可移除本地多余文件并重建远端分组
+- **动图播放** — GIF/WebP 动图在网格中直接播放（受设置页「动图自动播放」开关控制），右上角显示 GIF/WebP/隐写导入角标
+- **长按右键菜单** — 长按表情弹出菜单：重命名 / 收藏 / 添加分组 / 从分组移除 / 从最近使用中删除 / 删除，对齐桌面端 webui；分组移除后为空则自动删除该分组（小分组移回上层）
 
 ## 快速开始
 
@@ -33,6 +36,13 @@
 ```
 
 产物输出到 `app/build/outputs/apk/debug/`。
+
+### CI
+
+GitHub Actions 两个工作流（参考桌面端 `.github/workflows`）：
+
+- `Check` — 每次 push / PR 运行：`compileDebugKotlin` + `lintDebug` + `testDebugUnitTest`（JDK 17）
+- `Build` — Check 通过（main 分支）或手动触发时运行 `assembleDebug`，产出 Debug APK 并上传为 artifact
 
 ### 安装
 
@@ -85,7 +95,7 @@ com.ohmymeme.app/
 ├── MainActivity.kt     # 主界面：导入/刷新/搜索/网格
 ├── SettingsActivity.kt # 设置页：读写配置
 ├── ChipAdapter.kt      # 标签/分组胶囊适配器
-├── MemeGridAdapter.kt  # 表情网格适配器（异步加载缩略图）
+├── MemeGridAdapter.kt  # 表情网格适配器（异步加载缩略图 / GIF 动图播放）
 ├── Meme.kt             # 数据模型（对应 memes 表）
 ├── MemeDb.kt           # SQLite 封装（7 表 schema 与桌面端一致）
 ├── ConfigStore.kt      # JSON 配置读写 + 密钥加密
@@ -95,7 +105,8 @@ com.ohmymeme.app/
 ├── CacheScanner.kt     # 缓存扫描（双重去重）
 ├── MemeImporter.kt     # SAF 批量导入
 ├── Thumbnailer.kt      # 缩略图生成
-└── UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
+├── CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
+└── UpdateChecker.kt    # 版本更新检查（GitHub Releases API + 镜像下载）
 ```
 
 ## 实现要点
@@ -136,10 +147,11 @@ com.ohmymeme.app/
 - [x] 缓存扫描 + 导入 + 缩略图
 - [x] 设置保存/重置接真实配置
 - [x] 版本更新检查
+- [x] GIF 动图播放（含 WebP 动图，`auto_play_gif` 开关）
+- [x] 长按右键菜单（重命名/收藏/添加分组/从最近使用中删除/删除）
+- [x] 云端同步（FTP/S3/R2/WebDAV，含镜像源更新下载）
 - [ ] 点击复制到剪贴板
-- [ ] GIF 动图播放
 - [ ] 标签/分组管理交互
-- [ ] 远程同步（FTP/S3/R2/WebDAV）
 - [ ] 隐写 GIF 解码导入
 
 ## 许可证

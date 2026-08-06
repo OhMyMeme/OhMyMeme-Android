@@ -58,6 +58,25 @@ object FileUtils {
         return ""
     }
 
+    /** 对应桌面端 _is_animated：GIF89a 为动图；WebP 头含 ANIM chunk 为动图 */
+    fun isAnimatedFile(file: File): Boolean {
+        return try {
+            val head = ByteArray(50)
+            val n = file.inputStream().use { it.read(head) }
+            val data = head.copyOf(n)
+            if (data.size >= 6 && String(data, 0, 6, Charsets.ISO_8859_1) == "GIF89a") return true
+            if (data.size >= 12 &&
+                String(data, 0, 4, Charsets.ISO_8859_1) == "RIFF" &&
+                String(data, 8, 4, Charsets.ISO_8859_1) == "WEBP"
+            ) {
+                return String(data, 0, n, Charsets.ISO_8859_1).contains("ANIM")
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun startsWith(data: ByteArray, prefix: ByteArray): Boolean {
         for (i in prefix.indices) {
             if (data[i] != prefix[i]) return false

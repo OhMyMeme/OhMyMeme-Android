@@ -1,0 +1,1076 @@
+package com.ohmymeme.app
+
+import android.content.Context
+import android.graphics.BitmapFactory
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.File
+import java.io.IOException
+import java.io.InputStreamReader
+import java.io.PrintWriter
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.URL
+import java.net.URLDecoder
+import java.security.MessageDigest
+import java.util.Base64
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * 云端同步：FTP / S3（兼容 R2 / MinIO）/ WebDAV。
+ * 与桌面端 sync.py + manifest.py 对齐：远端 memes/ 目录 + meme-index.json 清单，
+ * 流式哈希比对跳过已同步文件。单线程执行。
+ */
+object CloudSync {
+
+    private const val TAG = "OhMyMeme"
+    private const val INDEX_FILENAME = "meme-index.json"
+    private const val REMOTE_MEME_DIR = "memes"
+    private const val MANIFEST_VERSION = 3
+
+    class SyncError(message: String) : Exception(message)
+
+    data class SyncResult(
+        val uploaded: Int = 0,
+        val downloaded: Int = 0,
+        val skipped: Int = 0,
+        val errors: Int = 0,
+        val deleted: Int = 0,
+        val removedLocal: Int = 0,
+        val failed: List<String> = emptyList()
+    )
+
+    // ─── 清单（对齐 manifest.py build/load） ───
+
+    private fun buildManifest(ctx: Context): JSONObject {
+        val db = MemeDb.get(ctx)
+        val memes = JSONArray()
+        for (m in db.getAll(0, Int.MAX_VALUE)) {
+            val entry = JSONObject()
+                .put("filename", m.filename)
+                .put("name", m.originalName.ifEmpty { m.filename.substringBeforeLast('.') })
+                .put("sha256", m.fileHash)
+                .put("file_size", m.fileSize)
+            val cacheFile = File(StoragePaths.cacheDir(ctx), m.filename)
+            if (cacheFile.exists()) {
+                entry.put("mtime", (cacheFile.lastModified() / 1000).toString())
+            }
+            memes.put(entry)
+        }
+        val data = JSONObject()
+            .put("version", MANIFEST_VERSION)
+            .put("memes", memes)
+            .put("collections", buildCollectionTree(ctx, null))
+        return data
+    }
+
+    private fun buildCollectionTree(ctx: Context, parentId: Long?): JSONArray {
+        val db = MemeDb.get(ctx)
+        val arr = JSONArray()
+        for (c in db.getCollections()) {
+            val pid = c.parentId ?: 0L
+            if (parentId == null) {
+                if (pid != 0L) continue
+            } else {
+                if (pid != parentId) continue
+            }
+            val members = db.search(collectionId = c.id, limit = Int.MAX_VALUE)
+            val filenames = JSONArray()
+            for (m in members) filenames.put(m.filename)
+            val children = buildCollectionTree(ctx, c.id)
+            if (filenames.length() == 0 && children.length() == 0) {
+                db.deleteCollection(c.id)
+                continue
+            }
+            val node = JSONObject().put("name", c.name).put("filenames", filenames)
+            if (children.length() > 0) node.put("children", children)
+            arr.put(node)
+        }
+        return arr
+    }
+
+    private fun parseMemes(data: JSONObject): Map<String, JSONObject> {
+        val map = HashMap<String, JSONObject>()
+        val arr = data.optJSONArray("memes")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val fname = obj.optString("filename", "")
+                if (fname.isNotEmpty()) map[fname] = obj
+            }
+        }
+        return map
+    }
+
+    private fun entriesFromDb(ctx: Context): Map<String, JSONObject> {
+        val db = MemeDb.get(ctx)
+        val map = HashMap<String, JSONObject>()
+        for (m in db.getAll(0, Int.MAX_VALUE)) {
+            map[m.filename] = JSONObject()
+                .put("filename", m.filename)
+                .put("name", m.originalName.ifEmpty { m.filename.substringBeforeLast('.') })
+                .put("sha256", m.fileHash)
+                .put("file_size", m.fileSize)
+        }
+        return map
+    }
+
+    // ─── 后端抽象 ───
+
+    private interface Backend {
+        fun connect()
+        fun testConnection()
+        fun ensureRemoteDir(path: String)
+        fun uploadFile(local: File, remotePath: String): Boolean
+        fun downloadFile(remotePath: String, dest: File): Boolean
+        fun fileExists(path: String): Boolean
+        fun deleteFile(path: String): Boolean
+        fun listFiles(path: String): List<String>
+        fun close()
+    }
+
+    // ─── FTP 后端（java.net 直写，被动模式） ───
+
+    private class FtpBackend(private val cfg: JSONObject) : Backend {
+        private var control: Socket? = null
+        private var reader: BufferedReader? = null
+        private var writer: PrintWriter? = null
+
+        override fun connect() {
+            val host = cfg.optString("ftp_host", "")
+            if (host.isEmpty()) throw SyncError("FTP host not configured")
+            val port = cfg.optInt("ftp_port", 21)
+            val user = cfg.optString("ftp_user", "")
+            val password = cfg.optString("ftp_password", "")
+            try {
+                android.util.Log.d(TAG, "FTP connecting $host:$port")
+                val sock = Socket()
+                sock.connect(InetSocketAddress(host, port), 30000)
+                sock.soTimeout = 60000
+                val rd = BufferedReader(InputStreamReader(sock.getInputStream(), Charsets.UTF_8))
+                val wr = PrintWriter(sock.getOutputStream(), true)
+                val greeting = readReply(rd)
+                android.util.Log.d(TAG, "FTP greeting: $greeting")
+                wr.println("USER ${user.ifEmpty { "anonymous" }}")
+                val userReply = readReply(rd)
+                android.util.Log.d(TAG, "FTP USER reply: $userReply")
+                wr.println("PASS $password")
+                val passReply = readReply(rd)
+                android.util.Log.d(TAG, "FTP PASS reply: $passReply")
+                control = sock
+                reader = rd
+                writer = wr
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "FTP connect failed: $e")
+                close()
+                throw SyncError("FTP connect failed: $e")
+            }
+        }
+
+        override fun testConnection() {}
+
+        private fun readReply(rd: BufferedReader): String {
+            val line = rd.readLine() ?: throw SyncError("FTP connection closed")
+            val code = line.take(3)
+            var last = line
+            if (code.toIntOrNull() != null && line.length > 3 && line[3] == '-') {
+                while (true) {
+                    last = rd.readLine() ?: throw SyncError("FTP connection closed")
+                    if (last.length >= 4 && last.startsWith("$code ")) break
+                }
+            }
+            if (code.startsWith("4") || code.startsWith("5")) {
+                throw SyncError("FTP server error: $last")
+            }
+            return last
+        }
+
+        private fun cmd(line: String): String {
+            val rd = reader ?: throw SyncError("FTP not connected")
+            writer?.println(line) ?: throw SyncError("FTP not connected")
+            return readReply(rd)
+        }
+
+        private fun dataSocket(line: String): Socket {
+            val reply = cmd(line)
+            if (reply.isEmpty()) throw SyncError("FTP data command failed")
+            val hostPort = reply.substringAfter('(').substringBefore(')')
+            if (hostPort.isEmpty() || hostPort == reply) {
+                throw SyncError("FTP 服务器未返回 PASV 地址")
+            }
+            val parts = hostPort.split(",")
+            if (parts.size != 6) throw SyncError("FTP PASV 响应格式错误")
+            val host = "${parts[0]}.${parts[1]}.${parts[2]}.${parts[3]}"
+            val p = parts[4].toInt() * 256 + parts[5].toInt()
+            val s = Socket()
+            s.connect(InetSocketAddress(host, p), 15000)
+            s.soTimeout = 30000
+            return s
+        }
+
+        override fun ensureRemoteDir(path: String) {
+            val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
+            var sofar = ""
+            for (p in parts) {
+                sofar += "/" + p
+                try {
+                    cmd("CWD $sofar")
+                } catch (e: SyncError) {
+                    cmd("MKD $sofar")
+                    cmd("CWD $sofar")
+                }
+            }
+        }
+
+        override fun uploadFile(local: File, remotePath: String): Boolean {
+            return try {
+                val data = dataSocket("PASV")
+                data.use {
+                    local.inputStream().use { ins ->
+                        val buf = ByteArray(65536)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            it.getOutputStream().write(buf, 0, n)
+                        }
+                    }
+                }
+                cmd("STOR $remotePath")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun downloadFile(remotePath: String, dest: File): Boolean {
+            return try {
+                val data = dataSocket("PASV")
+                data.use {
+                    dest.parentFile?.mkdirs()
+                    dest.outputStream().use { out ->
+                        val buf = ByteArray(65536)
+                        val ins = it.getInputStream()
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+                cmd("RETR $remotePath")
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun fileExists(path: String): Boolean {
+            return try {
+                cmd("SIZE $path")
+                true
+            } catch (e: SyncError) {
+                false
+            }
+        }
+
+        override fun deleteFile(path: String): Boolean {
+            return try {
+                cmd("DELE $path")
+                true
+            } catch (e: SyncError) {
+                false
+            }
+        }
+
+        override fun listFiles(path: String): List<String> {
+            return try {
+                val names = mutableListOf<String>()
+                val data = dataSocket("PASV")
+                data.use {
+                    val rd = BufferedReader(InputStreamReader(it.getInputStream(), Charsets.UTF_8))
+                    while (true) {
+                        val line = rd.readLine() ?: break
+                        if (line.isNotEmpty() && !line.endsWith("/")) {
+                            names.add(line.substringAfterLast('/'))
+                        }
+                    }
+                }
+                cmd("NLST $path")
+                names
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        override fun close() {
+            try {
+                writer?.println("QUIT")
+            } catch (e: Exception) {
+            }
+            try {
+                control?.close()
+            } catch (e: Exception) {
+            }
+            control = null
+            reader = null
+            writer = null
+        }
+    }
+
+    // ─── S3 后端（SigV4，兼容 R2 / MinIO） ───
+
+    private class S3Backend(private val cfg: JSONObject, private val isR2: Boolean) : Backend {
+        private var endpoint = ""
+        private var region = ""
+        private var accessKey = ""
+        private var secretKey = ""
+        private var bucket = ""
+        private var prefix = ""
+        private val awsDate = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+        private val awsTimestamp = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+
+        override fun connect() {
+            if (isR2) {
+                val accountId = cfg.optString("r2_account_id", "")
+                bucket = cfg.optString("r2_bucket", "")
+                accessKey = cfg.optString("r2_access_key_id", "")
+                secretKey = cfg.optString("r2_secret_access_key", "")
+                if (accountId.isEmpty() || bucket.isEmpty()) throw SyncError("R2 account ID and bucket not configured")
+                if (accessKey.isEmpty() || secretKey.isEmpty()) throw SyncError("R2 credentials not configured")
+                endpoint = "https://$accountId.r2.cloudflarestorage.com"
+                prefix = cfg.optString("r2_path", "").trim('/')
+            } else {
+                endpoint = cfg.optString("s3_endpoint", "")
+                bucket = cfg.optString("s3_bucket", "")
+                region = cfg.optString("s3_region", "")
+                accessKey = cfg.optString("s3_access_key", "")
+                secretKey = cfg.optString("s3_secret_key", "")
+                if (endpoint.isEmpty() || bucket.isEmpty()) throw SyncError("S3 endpoint or bucket not configured")
+                prefix = cfg.optString("s3_path", "").trim('/')
+            }
+            if (region.isEmpty()) region = "us-east-1"
+        }
+
+        override fun testConnection() {}
+
+        private fun key(remotePath: String): String {
+            val rel = remotePath.trimStart('/')
+            return if (prefix.isEmpty()) rel else "$prefix/$rel"
+        }
+
+        private fun encodeSegment(seg: String): String {
+            val out = StringBuilder()
+            for (b in seg.toByteArray(Charsets.UTF_8)) {
+                val c = b.toInt() and 0xFF
+                if (c in 'a'.code..'z'.code || c in 'A'.code..'Z'.code || c in '0'.code..'9'.code ||
+                    c == '-'.code || c == '_'.code || c == '.'.code || c == '~'.code
+                ) {
+                    out.append(c.toChar())
+                } else {
+                    out.append("%").append("%02X".format(c))
+                }
+            }
+            return out.toString()
+        }
+
+        private fun urlForKey(key: String): String {
+            val base = endpoint.trimEnd('/')
+            val encoded = key.split("/").joinToString("/") { encodeSegment(it) }
+            return "$base/$bucket/$encoded"
+        }
+
+        private fun hmac(key: ByteArray, data: String): ByteArray {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(key, "HmacSHA256"))
+            return mac.doFinal(data.toByteArray(Charsets.UTF_8))
+        }
+
+        private fun sha256Hex(data: ByteArray): String {
+            val md = MessageDigest.getInstance("SHA-256")
+            return md.digest(data).joinToString("") { "%02x".format(it) }
+        }
+
+        private fun sign(method: String, url: String): HttpURLConnection {
+            val u = URL(url)
+            val host = u.host
+            val path = if (u.path.isEmpty()) "/" else u.path
+            val query = u.query ?: ""
+            val now = java.util.Date()
+            val amzDate = awsTimestamp.format(now)
+            val dateStamp = awsDate.format(now)
+            val payloadHash = "UNSIGNED-PAYLOAD"
+
+            val canonicalHeaders =
+                "host:$host\n" +
+                    "x-amz-content-sha256:$payloadHash\n" +
+                    "x-amz-date:$amzDate\n"
+            val signedHeaders = "host;x-amz-content-sha256;x-amz-date"
+            val canonicalRequest = "$method\n$path\n$query\n$canonicalHeaders\n$signedHeaders\n$payloadHash"
+            val scope = "$dateStamp/$region/s3/aws4_request"
+            val stringToSign = "AWS4-HMAC-SHA256\n$amzDate\n$scope\n${sha256Hex(canonicalRequest.toByteArray(Charsets.UTF_8))}"
+
+            val dateKey = hmac(("AWS4$secretKey").toByteArray(Charsets.UTF_8), dateStamp)
+            val regionKey = hmac(dateKey, region)
+            val serviceKey = hmac(regionKey, "s3")
+            val signingKey = hmac(serviceKey, "aws4_request")
+            val signature = hmac(signingKey, stringToSign).joinToString("") { "%02x".format(it) }
+
+            val conn = u.openConnection() as HttpURLConnection
+            conn.requestMethod = method
+            conn.connectTimeout = 30000
+            conn.readTimeout = 60000
+            conn.setRequestProperty("Host", host)
+            conn.setRequestProperty("x-amz-date", amzDate)
+            conn.setRequestProperty("x-amz-content-sha256", payloadHash)
+            conn.setRequestProperty(
+                "Authorization",
+                "AWS4-HMAC-SHA256 Credential=$accessKey/$scope, SignedHeaders=$signedHeaders, Signature=$signature"
+            )
+            return conn
+        }
+
+        override fun ensureRemoteDir(path: String) {}
+
+        override fun uploadFile(local: File, remotePath: String): Boolean {
+            return try {
+                val conn = sign("PUT", urlForKey(key(remotePath)))
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/octet-stream")
+                conn.setFixedLengthStreamingMode(local.length())
+                local.inputStream().use { ins ->
+                    val buf = ByteArray(65536)
+                    val out = conn.outputStream
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                    }
+                }
+                val code = conn.responseCode
+                conn.disconnect()
+                android.util.Log.d(TAG, "S3 PUT $remotePath -> HTTP $code")
+                code in 200..299
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "S3 upload failed $remotePath: $e")
+                false
+            }
+        }
+
+        override fun downloadFile(remotePath: String, dest: File): Boolean {
+            return try {
+                val conn = sign("GET", urlForKey(key(remotePath)))
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    android.util.Log.e(TAG, "S3 GET $remotePath -> HTTP $code")
+                    conn.disconnect()
+                    return false
+                }
+                dest.parentFile?.mkdirs()
+                conn.inputStream.use { ins ->
+                    dest.outputStream().use { out ->
+                        val buf = ByteArray(65536)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+                conn.disconnect()
+                true
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "S3 download failed $remotePath: $e")
+                false
+            }
+        }
+
+        override fun fileExists(path: String): Boolean {
+            return try {
+                val conn = sign("HEAD", urlForKey(key(path)))
+                val code = conn.responseCode
+                conn.disconnect()
+                android.util.Log.d(TAG, "S3 HEAD $path -> HTTP $code")
+                code in 200..299
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "S3 HEAD $path failed: $e")
+                false
+            }
+        }
+
+        override fun deleteFile(path: String): Boolean {
+            return try {
+                val conn = sign("DELETE", urlForKey(key(path)))
+                val code = conn.responseCode
+                conn.disconnect()
+                android.util.Log.d(TAG, "S3 DELETE $path -> HTTP $code")
+                code in 200..299
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun listFiles(path: String): List<String> {
+            return try {
+                val p = prefixPath(path)
+                val listKey = if (prefix.isEmpty()) p.trim('/') else "$prefix/${p.trim('/')}"
+                val conn = sign("GET", urlForKey(listKey))
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    conn.disconnect()
+                    return emptyList()
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val files = mutableListOf<String>()
+                var idx = 0
+                val re = Regex("<Key>(.*?)</Key>")
+                for (m in re.findAll(body)) {
+                    val k = m.groupValues[1]
+                    if (!k.endsWith("/")) {
+                        val base = if (p.isEmpty()) "" else p.trim('/') + "/"
+                        if (k.startsWith(base)) files.add(k.substring(base.length))
+                    }
+                }
+                files
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        private fun prefixPath(path: String): String {
+            val rel = path.trim('/')
+            return if (prefix.isEmpty()) rel else rel.removePrefix(prefix.trimStart('/'))
+        }
+
+        override fun close() {}
+    }
+
+    // ─── WebDAV 后端 ───
+
+    private class WebDavBackend(private val cfg: JSONObject) : Backend {
+        private var baseUrl = ""
+        private var authHeader = ""
+        private var timeout = 30
+
+        override fun connect() {
+            val url = cfg.optString("webdav_url", "")
+            if (url.isEmpty()) throw SyncError("WebDAV url not configured")
+            val u = URL(url)
+            if (u.protocol != "http" && u.protocol != "https") {
+                throw SyncError("WebDAV URL 必须以 http:// 或 https:// 开头")
+            }
+            if (u.host.isEmpty()) throw SyncError("WebDAV URL 缺少主机名")
+            val encPath = u.path.split("/").joinToString("/") { encodeSegment(it) }
+            baseUrl = "${u.protocol}://${u.host}${if (u.port > 0) ":${u.port}" else ""}${encPath.trimEnd('/')}"
+            val user = cfg.optString("webdav_user", "")
+            val password = cfg.optString("webdav_password", "")
+            if (user.isNotEmpty()) {
+                authHeader = "Basic " + Base64.getEncoder().encodeToString("$user:$password".toByteArray(Charsets.UTF_8))
+            }
+            timeout = cfg.optInt("webdav_timeout", 30).coerceAtLeast(5)
+        }
+
+        override fun testConnection() {
+            val url = davUrl(cfg.optString("webdav_path", ""))
+            try {
+                val conn = request("PROPFIND", url, null, mapOf("Depth" to "0"))
+                val code = conn.responseCode
+                conn.disconnect()
+                if (code !in 200..299) throw SyncError("WebDAV PROPFIND returned HTTP $code")
+            } catch (e: SyncError) {
+                throw e
+            } catch (e: IOException) {
+                throw SyncError("WebDAV 网络不可达: $e")
+            }
+        }
+
+        private fun encodeSegment(seg: String): String {
+            if (seg.isEmpty()) return seg
+            val out = StringBuilder()
+            for (b in seg.toByteArray(Charsets.UTF_8)) {
+                val c = b.toInt() and 0xFF
+                if (c in 'a'.code..'z'.code || c in 'A'.code..'Z'.code || c in '0'.code..'9'.code ||
+                    c == '-'.code || c == '_'.code || c == '.'.code || c == '~'.code || c == '%'.code
+                ) {
+                    out.append(c.toChar())
+                } else {
+                    out.append("%").append("%02X".format(c))
+                }
+            }
+            return out.toString()
+        }
+
+        private fun davUrl(remotePath: String): String {
+            val rel = remotePath.trimStart('/')
+            val enc = rel.split("/").joinToString("/") { encodeSegment(it) }
+            return if (enc.isEmpty()) baseUrl.trimEnd('/') else baseUrl.trimEnd('/') + "/" + enc
+        }
+
+        private fun request(method: String, url: String, data: Any?, headers: Map<String, String> = emptyMap()): HttpURLConnection {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = method
+            conn.connectTimeout = timeout * 1000
+            conn.readTimeout = timeout * 1000
+            conn.setRequestProperty("User-Agent", "OhMyMeme-Android")
+            if (authHeader.isNotEmpty()) conn.setRequestProperty("Authorization", authHeader)
+            for ((k, v) in headers) conn.setRequestProperty(k, v)
+            if (data != null) {
+                conn.doOutput = true
+                if (data is ByteArray) conn.outputStream.write(data)
+                if (data is File) {
+                    conn.setFixedLengthStreamingMode(data.length())
+                    data.inputStream().use { ins ->
+                        val buf = ByteArray(65536)
+                        val out = conn.outputStream
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+            }
+            return conn
+        }
+
+        override fun ensureRemoteDir(path: String) {
+            var rel = ""
+            for (p in path.trim('/').split("/").filter { it.isNotEmpty() }) {
+                rel += "/" + p
+                try {
+                    val conn = request("MKCOL", davUrl(rel), null)
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    if (code in 200..399) continue
+                    if (fileExists(rel)) continue
+                    throw SyncError("MKCOL $rel 失败: HTTP $code")
+                } catch (e: SyncError) {
+                    throw e
+                } catch (e: IOException) {
+                    if (fileExists(rel)) continue
+                    throw SyncError("MKCOL $rel 失败: $e")
+                }
+            }
+        }
+
+        override fun uploadFile(local: File, remotePath: String): Boolean {
+            return try {
+                val conn = request(
+                    "PUT", davUrl(remotePath), local,
+                    mapOf("Content-Type" to "application/octet-stream")
+                )
+                val code = conn.responseCode
+                conn.disconnect()
+                code in 200..299
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun downloadFile(remotePath: String, dest: File): Boolean {
+            return try {
+                val conn = request("GET", davUrl(remotePath), null)
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    conn.disconnect()
+                    return false
+                }
+                dest.parentFile?.mkdirs()
+                val tmp = File(dest.parentFile, dest.name + ".tmp")
+                conn.inputStream.use { ins ->
+                    tmp.outputStream().use { out ->
+                        val buf = ByteArray(65536)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                        }
+                    }
+                }
+                conn.disconnect()
+                if (dest.exists()) dest.delete()
+                tmp.renameTo(dest)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun fileExists(path: String): Boolean {
+            return try {
+                val conn = request("PROPFIND", davUrl(path), null, mapOf("Depth" to "0"))
+                val code = conn.responseCode
+                conn.disconnect()
+                code in 200..299
+            } catch (e: IOException) {
+                try {
+                    val conn = request("HEAD", davUrl(path), null)
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    code in 200..299
+                } catch (e2: Exception) {
+                    false
+                }
+            }
+        }
+
+        override fun deleteFile(path: String): Boolean {
+            return try {
+                val conn = request("DELETE", davUrl(path), null)
+                val code = conn.responseCode
+                conn.disconnect()
+                code == 404 || code in 200..299
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        override fun listFiles(path: String): List<String> {
+            return try {
+                val conn = request("PROPFIND", davUrl(path), null, mapOf("Depth" to "1"))
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    conn.disconnect()
+                    return emptyList()
+                }
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val files = mutableListOf<String>()
+                val re = Regex("<D:href>(.*?)</D:href>|<d:href>(.*?)</d:href>")
+                for (m in re.findAll(raw)) {
+                    val href = m.groupValues[1].ifEmpty { m.groupValues[2] }
+                    if (href.endsWith("/")) continue
+                    val decoded = URLDecoder.decode(href, Charsets.UTF_8.name())
+                    val name = decoded.substringAfterLast('/')
+                    if (name.isNotEmpty()) files.add(name)
+                }
+                files
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        override fun close() {}
+    }
+
+    // ─── 后端工厂 ───
+
+    private fun createBackend(cfg: JSONObject): Backend {
+        return when (cfg.optString("sync_type", "")) {
+            "ftp" -> FtpBackend(cfg)
+            "s3" -> S3Backend(cfg, false)
+            "r2" -> S3Backend(cfg, true)
+            "webdav" -> WebDavBackend(cfg)
+            else -> throw SyncError("No sync type configured")
+        }
+    }
+
+    private fun remoteRoot(cfg: JSONObject): String {
+        return when (cfg.optString("sync_type", "")) {
+            "ftp" -> cfg.optString("ftp_path", "/")
+            "webdav" -> cfg.optString("webdav_path", "")
+            else -> ""
+        }
+    }
+
+    private fun remoteIndexPath(root: String): String {
+        return root.trimEnd('/') + "/" + INDEX_FILENAME
+    }
+
+    private fun remoteMemePath(root: String, filename: String): String {
+        return root.trimEnd('/') + "/" + REMOTE_MEME_DIR + "/" + filename
+    }
+
+    // ─── 公开 API ───
+
+    fun syncTest(ctx: Context): String {
+        return try {
+            val cfg = ConfigStore.get(ctx)
+            val bk = createBackend(cfg)
+            try {
+                bk.connect()
+                bk.testConnection()
+            } finally {
+                bk.close()
+            }
+            "ok"
+        } catch (e: Exception) {
+            e.message ?: "unknown error"
+        }
+    }
+
+    fun checkSyncStatus(ctx: Context): String {
+        return try {
+            val cfg = ConfigStore.get(ctx)
+            val bk = createBackend(cfg)
+            try {
+                bk.connect()
+                val data = downloadIndex(ctx, bk, cfg)
+                if (data == null) return "无法获取远端清单"
+                val remote = parseMemes(data).keys
+                val local = entriesFromDb(ctx).keys
+                val extra = local - remote
+                val missing = remote - local
+                if (extra.isEmpty() && missing.isEmpty()) {
+                    return "已同步（本地 ${local.size}，远端 ${remote.size}）"
+                }
+                val sb = StringBuilder("本地 ${local.size}，远端 ${remote.size}")
+                if (extra.isNotEmpty()) sb.append("\n仅本地: ${extra.joinToString(", ") { it }.take(120)}")
+                if (missing.isNotEmpty()) sb.append("\n仅远端: ${missing.joinToString(", ") { it }.take(120)}")
+                sb.toString()
+            } finally {
+                bk.close()
+            }
+        } catch (e: Exception) {
+            e.message ?: "unknown error"
+        }
+    }
+
+    fun push(ctx: Context): SyncResult {
+        val cfg = ConfigStore.get(ctx)
+        val root = remoteRoot(cfg)
+        val cacheDir = StoragePaths.cacheDir(ctx)
+        val deleteRemote = cfg.optBoolean("sync_delete_remote", false)
+        val local = entriesFromDb(ctx)
+        if (local.isEmpty()) throw SyncError("local manifest is empty, nothing to push")
+        val bk = createBackend(cfg)
+        try {
+            bk.connect()
+            bk.ensureRemoteDir(root)
+            val remoteData = downloadIndex(ctx, bk, cfg)
+            val remote = if (remoteData != null) parseMemes(remoteData) else emptyMap()
+            var uploaded = 0
+            var skipped = 0
+            var errors = 0
+            val failed = mutableListOf<String>()
+            for ((fname, entry) in local) {
+                val remoteEntry = remote[fname]
+                val localFile = File(cacheDir, fname)
+                if (remoteEntry != null && remoteEntry.optString("sha256", "") == entry.optString("sha256", "")) {
+                    if (bk.fileExists(remoteMemePath(root, fname))) {
+                        skipped++
+                        continue
+                    }
+                }
+                if (!localFile.exists()) {
+                    errors++
+                    failed.add(fname)
+                    continue
+                }
+                bk.ensureRemoteDir(root + "/" + REMOTE_MEME_DIR)
+                if (bk.uploadFile(localFile, remoteMemePath(root, fname))) {
+                    uploaded++
+                } else {
+                    errors++
+                    failed.add(fname)
+                }
+            }
+            if (errors > 0) {
+                throw SyncError("$errors 个文件上传失败，未更新远端清单")
+            }
+            var deleted = 0
+            if (deleteRemote) {
+                for (fname in remote.keys) {
+                    if (fname in local) continue
+                    if (bk.deleteFile(remoteMemePath(root, fname))) deleted++
+                }
+            }
+            var data = buildManifest(ctx)
+            val kept = remote.values.filter { it.optString("filename", "") !in local.keys }
+            if (kept.isNotEmpty()) {
+                val arr = data.optJSONArray("memes")!!
+                for (m in kept) arr.put(m)
+                data.put("memes", arr)
+            }
+            val indexFile = writeTempIndex(ctx, data)
+            if (!bk.uploadFile(indexFile, remoteIndexPath(root))) {
+                indexFile.delete()
+                throw SyncError("远端清单上传失败")
+            }
+            indexFile.delete()
+            return SyncResult(uploaded = uploaded, skipped = skipped, errors = 0, deleted = deleted, failed = failed)
+        } finally {
+            bk.close()
+        }
+    }
+
+    fun pull(ctx: Context): SyncResult {
+        val cfg = ConfigStore.get(ctx)
+        val root = remoteRoot(cfg)
+        val cacheDir = StoragePaths.cacheDir(ctx)
+        val removeLocal = cfg.optBoolean("sync_remove_local", false)
+        val db = MemeDb.get(ctx)
+        val bk = createBackend(cfg)
+        try {
+            bk.connect()
+            val data = downloadIndex(ctx, bk, cfg) ?: throw SyncError("no remote manifest available")
+            val remote = parseMemes(data)
+            val local = entriesFromDb(ctx)
+            var downloaded = 0
+            var skipped = 0
+            var errors = 0
+            val failed = mutableListOf<String>()
+            for ((fname, rentry) in remote) {
+                val localEntry = local[fname]
+                val localFile = File(cacheDir, fname)
+                if (localEntry != null &&
+                    localEntry.optString("sha256", "") == rentry.optString("sha256", "") &&
+                    localFile.exists()
+                ) {
+                    skipped++
+                    continue
+                }
+                if (bk.downloadFile(remoteMemePath(root, fname), localFile)) {
+                    if (localFile.length() == 0L) {
+                        errors++
+                        failed.add(fname)
+                        localFile.delete()
+                        continue
+                    }
+                    if (db.getByFilename(fname) == null) {
+                        val dims = readDimensions(localFile)
+                        val oname = rentry.optString("name", "").ifEmpty { fname.substringBeforeLast('.') }
+                        db.addMeme(
+                            filename = fname,
+                            fileHash = rentry.optString("sha256", ""),
+                            width = dims.first,
+                            height = dims.second,
+                            fileSize = localFile.length(),
+                            mimeType = "image/${fname.substringAfterLast('.', "png").lowercase()}",
+                            originalName = oname
+                        )
+                    }
+                    downloaded++
+                } else {
+                    errors++
+                    failed.add(fname)
+                }
+            }
+            if (removeLocal) {
+                var removed = 0
+                val thumbs = StoragePaths.thumbnailDir(ctx)
+                for (fname in local.keys) {
+                    if (fname in remote) continue
+                    val row = db.getByFilename(fname)
+                    if (row != null) {
+                        thumbs.listFiles()?.forEach { t ->
+                            if (t.name.startsWith("${row.id}_")) t.delete()
+                        }
+                        db.deleteMeme(row.id)
+                    }
+                    val f = File(cacheDir, fname)
+                    if (f.exists() && f.delete()) removed++
+                }
+                return SyncResult(
+                    downloaded = downloaded, skipped = skipped, errors = errors,
+                    removedLocal = removed, failed = failed
+                )
+            }
+            applyRemoteCollections(ctx, data)
+            if (errors > 0) {
+                throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
+            }
+            return SyncResult(downloaded = downloaded, skipped = skipped, errors = 0, failed = failed)
+        } finally {
+            bk.close()
+        }
+    }
+
+    fun deleteAllRemote(ctx: Context): Pair<Boolean, String> {
+        return try {
+            val cfg = ConfigStore.get(ctx)
+            val root = remoteRoot(cfg)
+            val bk = createBackend(cfg)
+            try {
+                bk.connect()
+                val data = downloadIndex(ctx, bk, cfg)
+                val remote = if (data != null) parseMemes(data) else emptyMap()
+                var count = 0
+                for (fname in remote.keys) {
+                    if (bk.deleteFile(remoteMemePath(root, fname))) count++
+                }
+                bk.deleteFile(remoteIndexPath(root))
+                return true to "已删除 $count 个远端文件"
+            } finally {
+                bk.close()
+            }
+        } catch (e: Exception) {
+            false to (e.message ?: "unknown error")
+        }
+    }
+
+    fun deleteAllLocal(ctx: Context): Int {
+        val db = MemeDb.get(ctx)
+        val memes = db.getAll(0, Int.MAX_VALUE)
+        val cache = StoragePaths.cacheDir(ctx)
+        val thumbs = StoragePaths.thumbnailDir(ctx)
+        var count = 0
+        for (m in memes) {
+            val f = File(cache, m.filename)
+            if (f.exists() && f.delete()) count++
+            thumbs.listFiles()?.forEach { t ->
+                if (t.name.startsWith("${m.id}_")) t.delete()
+            }
+        }
+        db.deleteAll()
+        return count
+    }
+
+    private fun downloadIndex(ctx: Context, bk: Backend, cfg: JSONObject): JSONObject? {
+        val root = remoteRoot(cfg)
+        val remotePath = remoteIndexPath(root)
+        if (!bk.fileExists(remotePath)) return null
+        val tmp = File(StoragePaths.dataDir(ctx), ".remote-index.json")
+        try {
+            if (!bk.downloadFile(remotePath, tmp)) throw SyncError("远端清单下载失败")
+            return JSONObject(tmp.readText())
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    private fun writeTempIndex(ctx: Context, data: JSONObject): File {
+        val tmp = File(StoragePaths.dataDir(ctx), ".local-index.json")
+        tmp.writeText(data.toString())
+        return tmp
+    }
+
+    private fun applyRemoteCollections(ctx: Context, data: JSONObject) {
+        val db = MemeDb.get(ctx)
+        val arr = data.optJSONArray("collections")
+        if (arr == null) return
+        for (i in 0 until arr.length()) {
+            val node = arr.optJSONObject(i) ?: continue
+            val name = node.optString("name", "")
+            if (name.isEmpty()) continue
+            val cid = db.createCollection(name)
+            if (cid < 0) continue
+            val fnames = node.optJSONArray("filenames")
+            if (fnames != null) {
+                for (j in 0 until fnames.length()) {
+                    val fname = fnames.optString(j, "")
+                    val row = db.getByFilename(fname)
+                    if (row != null) db.addToCollection(row.id, cid)
+                }
+            }
+        }
+    }
+
+    private fun readDimensions(file: File): Pair<Int, Int> {
+        return try {
+            val opts = BitmapFactory.Options()
+            opts.inJustDecodeBounds = true
+            BitmapFactory.decodeFile(file.absolutePath, opts)
+            opts.outWidth to opts.outHeight
+        } catch (e: Exception) {
+            0 to 0
+        }
+    }
+}
