@@ -22,6 +22,7 @@ class MemeGridAdapter(
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
+    var onItemClick: ((View, Meme) -> Unit)? = null
     var onLongClick: ((View, Meme) -> Unit)? = null
 
     class MemeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
@@ -41,6 +42,9 @@ class MemeGridAdapter(
         img.setColorFilter(context.getColor(R.color.muted))
         img.tag = meme.id
         name.text = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
+        holder.itemView.setOnClickListener {
+            onItemClick?.invoke(it, meme)
+        }
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(it, meme)
             true

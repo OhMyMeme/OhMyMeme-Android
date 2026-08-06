@@ -5,6 +5,8 @@ import org.json.JSONObject
 
 object ConfigStore {
 
+    private const val TAG = "OhMyMeme/ConfigStore"
+
     private val SECRET_KEYS = setOf(
         "s3_access_key",
         "s3_secret_key",
@@ -114,15 +116,16 @@ object ConfigStore {
                     }
                 }
             } catch (e: Exception) {
-                // 损坏时使用默认值
+                android.util.Log.w(TAG, "config parse failed, fallback to defaults: $e")
             }
         } else {
             // 首次运行：落盘默认配置，确保 config.json 存在
             try {
                 file.parentFile?.mkdirs()
                 file.writeText(obj.toString(2))
+                android.util.Log.d(TAG, "wrote default config to $file")
             } catch (e: Exception) {
-                // 忽略写盘失败
+                android.util.Log.w(TAG, "failed to write default config: $e")
             }
         }
         return obj
@@ -177,6 +180,7 @@ object ConfigStore {
             val file = StoragePaths.configFile(context)
             file.parentFile?.mkdirs()
             file.writeText(copy.toString(2))
+            android.util.Log.d(TAG, "saved config to $file")
         }
     }
 

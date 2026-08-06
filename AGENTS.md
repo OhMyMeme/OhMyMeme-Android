@@ -35,7 +35,7 @@ app/src/main/
   java/com/ohmymeme/app/
     MainActivity.kt     # 主界面：导入/刷新/搜索/网格 + 空状态
     SettingsActivity.kt # 设置页：loadConfig/saveConfig/reset 接真实配置
-    ChipAdapter.kt      # 标签/分组胶囊（TAG/COLLECTION 两种样式）
+    ChipAdapter.kt      # 分组胶囊适配器（仅 COLLECTION 样式）
     MemeGridAdapter.kt  # 表情网格，异步缩略图加载，按 meme.id 打 tag 防错位
     Meme.kt             # 数据模型（对应 memes 表，含 stego/fromStego 字段）
     MemeDb.kt           # SQLite 封装（7 表 + 索引 + 列迁移）
@@ -45,6 +45,9 @@ app/src/main/
     FileUtils.kt        # SHA-256 + 魔数识别扩展名
     CacheScanner.kt     # 缓存扫描（双重去重）
     MemeImporter.kt     # SAF 批量导入
+    GifFrameDecoder.kt  # 自研最小 GIF 解码器（LZW/interlace/色板，与 Pillow 一致）
+    GifStego.kt         # STG3 隐写检测 + 7 模式解码 + 自研 PNG 编码
+    AndroidGifDecoder.kt# 设备端 WebP→RGBA（反预乘 alpha）
     Thumbnailer.kt      # 缩略图生成 {id}_{size}.png
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
@@ -88,7 +91,9 @@ Android/data/com.ohmymeme.app/
 ### 导入（MemeImporter.kt）
 - SAF `ACTION_OPEN_DOCUMENT` 多选 → 逐文件：查哈希去重 → 魔数识别扩展名 → 拷贝到 `cache/{hash16}{ext}` → 读尺寸 → `addMeme`
 - 单文件失败不影响其余文件（catch 后继续）
-- 隐写 GIF 解码（桌面端 `_try_decode_stego`）尚未移植
+- **隐写 GIF 解码**（对应桌面端 `_try_decode_stego` + `gif_stego.py`）：GIF 且含 `STG3` 时 `GifStego.decode` 还原原图（7 种模式），只导入还原结果 `fromStego=1`，GIF 本身不入库；WebP 模式经 `AndroidGifDecoder.webpToRgba` 解码（反预乘 alpha）
+- `GifFrameDecoder` 为自研最小 GIF 解码器（GIF87a/89a、全局/局部色板、LZW、interlace、透明索引直映射 RGB、Pillow 一致的 `(R*299+G*587+B*114+500)/1000` 灰度），与 Pillow 逐字节一致；LZMA 用 `org.tukaani:xz`（`XZInputStream`）；PNG 输出用自研 RGBA 编码器
+- `CacheScanner` 不做 STG3 检测（对齐桌面端 `scan_cache`）
 
 ### 缓存扫描（CacheScanner.kt）
 - 遍历 cache 目录：跳过非图片扩展名、`thumbnails` 路径、与同名 `.webp` 共存的 `.gif`
@@ -109,15 +114,21 @@ Android/data/com.ohmymeme.app/
 - 长按回调 `onLongClick` 属性，由 MainActivity 弹 PopupMenu
 
 ### 长按右键菜单（MainActivity.kt）
-- `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 添加分组 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
+- `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
 - 删除走 `deleteMemeFiles`：删物理文件（`Thumbnailer.findMemeFile`）+ 删 `{id}_*.png` 缩略图 + `deleteMeme` 删库，与桌面端一致
 - 设置页用 Activity Result API（`registerForActivityResult`，`settingsLauncher`）打开，返回 `RESULT_OK` 后 `reloadData()` 使配置（如动图开关）立即生效；导入/选目录/设置统一走 `ActivityResultContracts.StartActivityForResult`
 
-### 标签/分组胶囊过滤（MainActivity.kt）
-- 点击 `rv_tags`/`rv_collections` 胶囊过滤表情：标签可多选叠加（`activeTags`），分组单选切换（`activeCollectionId`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
-- `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count)`），分组胶囊带数量，label 显示 `名称 (count)`
+### 分组胶囊过滤（MainActivity.kt）
+- 点击 `rv_collections` 胶囊过滤表情：分组单选切换（`activeCollectionId`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
+- `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
 - 分组栏含系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`
+
+### 小分组（子分组）
+- 对齐桌面端 `create_subcollection` + webui 顶栏：**仅 1 层**——`getCollectionDepth(parentId) >= 1` 时拒绝创建并提示「最多支持1层小分组」
+- 顶栏分组胶囊按 `MemeDb.getCollections()` 构建树（`buildTree`），仅当父分组激活或在激活路径（`computeActivePath` 向上追溯祖先）时 `flatten` 展开其子分组胶囊，与桌面端 `renderCollections` 的 `parentActive || activeCollection===c.id || activePath.has(c.id)` 逻辑一致
+- 长按顶栏分组胶囊 → `promptCreateSubcollection` 新建小分组（`createCollection(name, parentId)`）；对系统分组（id<=0）长按无反应
+- 表情长按菜单「加入小分组」→ `promptAddToSubgroup`：列出当前分组子分组 + 「新建小分组」，选中即 `addToCollection`；新建时走 `promptCreateSubcollectionFor`（同样受 1 层限制），对齐桌面端网格右键 `add-to-subgroup`
 
 ### 从分组移除 / 空分组自动删除（MainActivity.kt）
 - 长按菜单「从分组移除」仅在查看具体分组（`activeCollectionId > 0`）时显示；从最近使用视图查看时显示「从最近使用中删除」
@@ -127,12 +138,16 @@ Android/data/com.ohmymeme.app/
 ### 版本更新（UpdateChecker.kt）
 - 桌面端 `updater.py` 迁移：`_parse_version` → `parseVersion`，`_pick_asset_url` → 遍历 assets 找 `.apk`
 - GitHub Releases API：`https://api.github.com/repos/OhMyMeme/OhMyMeme-Android/releases/latest`，repo 地址与桌面端不同（Android 仓库）
+- **两级回退**（对齐桌面端 `check_latest`）：先并发 `fetchFirst(GITHUB_LATEST)`（镜像+直连，`invokeAny`），404/失败时回退 `GITHUB_LIST`（`releases?per_page=5`）`pickHighestFromList` 取最高版本（无 `.apk` 资产时回退 release `html_url`）
+- **并发抓取**：`fetchFirst` 把 4 镜像前缀 + 直连共 5 个 URL 并发 GET，`invokeAny` 等待首个真正成功（`fetchBody` 失败抛异常，避免早期修复中"null 被当作成功"导致直连没机会）；UA 伪造安卓 Chrome（`UA` 常量）
 - 版本比较：`parseVersion` 拆 `v0.1.0` 为 `[0,1,0]`，按位比较（`compareVersions`），大于当前 versionName 视为有更新
 - 安卓无法自动安装 APK：检测到新版本用 `AlertDialog` 引导，点击「下载」`ACTION_VIEW` 打开 APK `browser_download_url`（无 apk 资产时回退 release `html_url`）
 - **镜像下载**：API 仍直连 GitHub，仅下载地址走镜像。`mirrorDownloadUrl` 按桌面端 `updater.py` `_GH_MIRRORS`（github.dpik.top / gh.dpik.top / gh-proxy.org / proxy.starsfire.top/-----）前缀逐个 HEAD 探测，返回第一个可用镜像 URL，全失败回退直连；`SettingsActivity` 下载时先经 `mirrorDownloadUrl`
 - `checkUpdate()` 在后台 `Thread` 跑 `checkLatest`（网络阻塞），`runOnUiThread` 回主线程更新按钮状态/弹窗；`UpdateInfo` 的 `error` 字段承载网络失败文案（未接显示系统，暂以 Toast 呈现）
 
 ### 云端同步（CloudSync.kt）
+- **多线程 + 进度回调**（对齐桌面端 `sync_threads`，默认 3，1-8）：`push`/`pull` 分块并发（`chunkList` + `ThreadPoolExecutor`），每块 worker 独立 `createBackend`/`connect` 连接（对应桌面端 `_push_worker`/`_pull_worker` 独立后端）；worker 内跳过/成功/失败分别计数，单文件失败不影响其余；pull 下载后统一回主线程写 DB（避免多线程并发写 SQLite）
+- `SyncProgress` 线程安全计数类（`filesTotal`/`bytesTotal`/`report`/`done`/`bytesDone`/`currentFile`/`startTime`/`onProgress` 回调），worker 线程回调、UI 自行 `runOnUiThread`
 - 对齐桌面端 `sync.py` + `manifest.py`：远端目录 `memes/`（REMOTE_MEME_DIR）+ `meme-index.json`（INDEX_FILENAME，清单 version 3）；远端根：FTP→`ftp_path`、WebDAV→`webdav_path`、对象存储→空
 - 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）
 - 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置，AWS SigV4 手写签名，endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用 HTTP（MKCOL 幂等建目录/PUT/GET/PROPFIND/HEAD 回退/DELETE）
@@ -173,9 +188,16 @@ Android/data/com.ohmymeme.app/
 - 长按右键菜单（重命名/收藏/添加分组/从最近使用中删除/删除）
 - 表情网格间距（卡片 5dp 外边距）
 - 更新下载镜像源回退（github.dpik.top 等 4 个镜像 + 直连）
-- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status）
+- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿）
+- 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses，最近使用分组自动刷新
+- 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
+- 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
+- 顶部快捷同步：主界面标题栏上传/下载图标，一键 push/pull
+- 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要
+- 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新 localdata 目录，弹窗询问是否转移现有文件（数据库/缓存/缩略图），config.json 保持不变
+- 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
+- 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 
 ### 未实现（后续待做）
 - 点击复制到剪贴板（桌面端 clipboard_util 移植）
-- 标签/分组管理交互（增删改）
-- 隐写 GIF 解码导入
+- 分组管理交互（增删改，小分组已支持，完整分组管理未做）

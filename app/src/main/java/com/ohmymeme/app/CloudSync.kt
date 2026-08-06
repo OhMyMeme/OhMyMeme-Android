@@ -16,13 +16,16 @@ import java.net.URL
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
  * 云端同步：FTP / S3（兼容 R2 / MinIO）/ WebDAV。
  * 与桌面端 sync.py + manifest.py 对齐：远端 memes/ 目录 + meme-index.json 清单，
- * 流式哈希比对跳过已同步文件。单线程执行。
+ * 流式哈希比对跳过已同步文件。push/pull 多线程（sync_threads 并发，默认 3）。
  */
 object CloudSync {
 
@@ -42,6 +45,51 @@ object CloudSync {
         val removedLocal: Int = 0,
         val failed: List<String> = emptyList()
     )
+
+    /** 多线程同步进度（线程安全）；onProgress 在 worker 线程回调，UI 需自行 runOnUiThread */
+    class SyncProgress {
+        @Volatile var filesTotal: Int = 0
+        @Volatile var bytesTotal: Long = 0L
+        private val lock = Any()
+        private var filesDone = 0
+        private var bytesDone = 0L
+        @Volatile var currentFile: String = ""
+        var startTime: Long = System.currentTimeMillis()
+        var onProgress: ((SyncProgress) -> Unit)? = null
+
+        fun report(bytes: Long, file: String) {
+            synchronized(lock) {
+                filesDone++
+                bytesDone += bytes
+                currentFile = file
+            }
+            onProgress?.invoke(this)
+        }
+
+        fun done(): Int = synchronized(lock) { filesDone }
+        fun bytesDone(): Long = synchronized(lock) { bytesDone }
+    }
+
+    private data class WorkerResult(
+        val done: Int = 0,
+        val errors: Int = 0,
+        val failed: List<String> = emptyList()
+    )
+
+    private fun <T> chunkList(list: List<T>, n: Int): List<List<T>> {
+        if (n <= 1 || list.size <= 1) return listOf(list)
+        val k = list.size / n
+        val m = list.size % n
+        val result = mutableListOf<List<T>>()
+        var idx = 0
+        for (i in 0 until n) {
+            val len = k + if (i < m) 1 else 0
+            if (len <= 0) continue
+            result.add(list.subList(idx, idx + len))
+            idx += len
+        }
+        return result
+    }
 
     // ─── 清单（对齐 manifest.py build/load） ───
 
@@ -833,53 +881,70 @@ object CloudSync {
         }
     }
 
-    fun push(ctx: Context): SyncResult {
+    fun push(ctx: Context, progress: SyncProgress? = null): SyncResult {
+        android.util.Log.d(TAG, "push start")
         val cfg = ConfigStore.get(ctx)
         val root = remoteRoot(cfg)
         val cacheDir = StoragePaths.cacheDir(ctx)
         val deleteRemote = cfg.optBoolean("sync_delete_remote", false)
+        val maxWorkers = cfg.optInt("sync_threads", 3).coerceIn(1, 8)
         val local = entriesFromDb(ctx)
         if (local.isEmpty()) throw SyncError("local manifest is empty, nothing to push")
-        val bk = createBackend(cfg)
+
+        val remote: Map<String, JSONObject>
+        val bkMain = createBackend(cfg)
         try {
-            bk.connect()
-            bk.ensureRemoteDir(root)
-            val remoteData = downloadIndex(ctx, bk, cfg)
-            val remote = if (remoteData != null) parseMemes(remoteData) else emptyMap()
-            var uploaded = 0
-            var skipped = 0
-            var errors = 0
-            val failed = mutableListOf<String>()
-            for ((fname, entry) in local) {
-                val remoteEntry = remote[fname]
-                val localFile = File(cacheDir, fname)
-                if (remoteEntry != null && remoteEntry.optString("sha256", "") == entry.optString("sha256", "")) {
-                    if (bk.fileExists(remoteMemePath(root, fname))) {
-                        skipped++
-                        continue
-                    }
-                }
-                if (!localFile.exists()) {
-                    errors++
-                    failed.add(fname)
-                    continue
-                }
-                bk.ensureRemoteDir(root + "/" + REMOTE_MEME_DIR)
-                if (bk.uploadFile(localFile, remoteMemePath(root, fname))) {
-                    uploaded++
-                } else {
-                    errors++
-                    failed.add(fname)
-                }
+            bkMain.connect()
+            bkMain.ensureRemoteDir(root)
+            val remoteData = downloadIndex(ctx, bkMain, cfg)
+            remote = if (remoteData != null) parseMemes(remoteData) else emptyMap()
+        } finally {
+            bkMain.close()
+        }
+
+        val entries = local.entries.toList()
+        val filesTotal = entries.size
+        val bytesTotal = entries.sumOf { (fname, _) -> File(cacheDir, fname).length() }
+        progress?.let {
+            it.filesTotal = filesTotal
+            it.bytesTotal = bytesTotal
+        }
+        val chunks = chunkList(entries, minOf(maxWorkers, filesTotal))
+
+        val pool = Executors.newFixedThreadPool(chunks.size)
+        var uploaded = 0
+        var skipped = 0
+        var errors = 0
+        val failed = mutableListOf<String>()
+        try {
+            val futures = chunks.map { chunk ->
+                pool.submit(Callable {
+                    pushWorker(ctx, chunk, root, cacheDir, remote, progress)
+                })
             }
-            if (errors > 0) {
-                throw SyncError("$errors 个文件上传失败，未更新远端清单")
+            for (f in futures) {
+                val r = f.get()
+                uploaded += r.done
+                errors += r.errors
+                failed.addAll(r.failed)
             }
-            var deleted = 0
+            skipped = filesTotal - uploaded - errors
+        } catch (e: Exception) {
+            throw SyncError(e.message ?: "sync push failed")
+        } finally {
+            pool.shutdownNow()
+        }
+        if (errors > 0) {
+            throw SyncError("$errors 个文件上传失败，未更新远端清单")
+        }
+        var deleted = 0
+        val bkFin = createBackend(cfg)
+        try {
+            bkFin.connect()
             if (deleteRemote) {
                 for (fname in remote.keys) {
                     if (fname in local) continue
-                    if (bk.deleteFile(remoteMemePath(root, fname))) deleted++
+                    if (bkFin.deleteFile(remoteMemePath(root, fname))) deleted++
                 }
             }
             var data = buildManifest(ctx)
@@ -890,41 +955,199 @@ object CloudSync {
                 data.put("memes", arr)
             }
             val indexFile = writeTempIndex(ctx, data)
-            if (!bk.uploadFile(indexFile, remoteIndexPath(root))) {
+            if (!bkFin.uploadFile(indexFile, remoteIndexPath(root))) {
                 indexFile.delete()
                 throw SyncError("远端清单上传失败")
             }
             indexFile.delete()
-            return SyncResult(uploaded = uploaded, skipped = skipped, errors = 0, deleted = deleted, failed = failed)
+        } finally {
+            bkFin.close()
+        }
+        android.util.Log.d(TAG, "push done uploaded=$uploaded skipped=$skipped deleted=$deleted")
+        return SyncResult(uploaded = uploaded, skipped = skipped, errors = 0, deleted = deleted, failed = failed)
+    }
+
+    private fun pushWorker(
+        ctx: Context,
+        chunk: List<Map.Entry<String, JSONObject>>,
+        root: String,
+        cacheDir: File,
+        remote: Map<String, JSONObject>,
+        progress: SyncProgress?
+    ): WorkerResult {
+        val cfg = ConfigStore.get(ctx)
+        val bk = createBackend(cfg)
+        var done = 0
+        var errors = 0
+        val failed = mutableListOf<String>()
+        try {
+            bk.connect()
+            bk.ensureRemoteDir(root)
+            val memeDir = root + "/" + REMOTE_MEME_DIR
+            for ((fname, entry) in chunk) {
+                val remoteEntry = remote[fname]
+                val localFile = File(cacheDir, fname)
+                if (remoteEntry != null &&
+                    remoteEntry.optString("sha256", "") == entry.optString("sha256", "")
+                ) {
+                    if (bk.fileExists(remoteMemePath(root, fname))) {
+                        done++
+                        progress?.report(0, fname)
+                        continue
+                    }
+                }
+                if (!localFile.exists()) {
+                    errors++
+                    failed.add(fname)
+                    progress?.report(0, fname)
+                    continue
+                }
+                bk.ensureRemoteDir(memeDir)
+                if (bk.uploadFile(localFile, remoteMemePath(root, fname))) {
+                    done++
+                    progress?.report(localFile.length(), fname)
+                } else {
+                    errors++
+                    failed.add(fname)
+                    progress?.report(0, fname)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "push worker failed: $e")
+            val remaining = chunk.size - done - errors
+            if (remaining > 0) {
+                errors += remaining
+                failed.add("$remaining 个文件因 worker 中断未处理")
+            }
         } finally {
             bk.close()
         }
+        return WorkerResult(done, errors, failed)
     }
 
-    fun pull(ctx: Context): SyncResult {
+    fun pull(ctx: Context, progress: SyncProgress? = null): SyncResult {
+        android.util.Log.d(TAG, "pull start")
         val cfg = ConfigStore.get(ctx)
         val root = remoteRoot(cfg)
         val cacheDir = StoragePaths.cacheDir(ctx)
         val removeLocal = cfg.optBoolean("sync_remove_local", false)
+        val maxWorkers = cfg.optInt("sync_threads", 3).coerceIn(1, 8)
+
+        val bkMain = createBackend(cfg)
+        val data: JSONObject
+        try {
+            bkMain.connect()
+            data = downloadIndex(ctx, bkMain, cfg) ?: throw SyncError("no remote manifest available")
+        } finally {
+            bkMain.close()
+        }
+        val remote = parseMemes(data)
+        val local = entriesFromDb(ctx)
+        val entries = remote.entries.toList()
+        val filesTotal = entries.size
+        val bytesTotal = entries.sumOf { (fname, rentry) ->
+            if (local[fname]?.optString("sha256", "") == rentry.optString("sha256", "") &&
+                File(cacheDir, fname).exists()
+            ) 0L else rentry.optLong("file_size", 0L)
+        }
+        progress?.let {
+            it.filesTotal = filesTotal
+            it.bytesTotal = bytesTotal
+        }
+        val chunks = chunkList(entries, minOf(maxWorkers, filesTotal))
+
+        val pool = Executors.newFixedThreadPool(chunks.size)
+        var downloaded = 0
+        var skipped = 0
+        var errors = 0
+        val failed = mutableListOf<String>()
+        try {
+            val futures = chunks.map { chunk ->
+                pool.submit(Callable {
+                    pullWorker(ctx, chunk, root, cacheDir, local, progress)
+                })
+            }
+            for (f in futures) {
+                val r = f.get()
+                downloaded += r.done
+                errors += r.errors
+                failed.addAll(r.failed)
+            }
+            skipped = filesTotal - downloaded - errors
+        } catch (e: Exception) {
+            throw SyncError(e.message ?: "sync pull failed")
+        } finally {
+            pool.shutdownNow()
+        }
+
         val db = MemeDb.get(ctx)
+        for (fname in remote.keys) {
+            val localFile = File(cacheDir, fname)
+            if (!localFile.exists() || localFile.length() == 0L) continue
+            if (db.getByFilename(fname) != null) continue
+            val rentry = remote[fname] ?: continue
+            val dims = readDimensions(localFile)
+            val oname = rentry.optString("name", "").ifEmpty { fname.substringBeforeLast('.') }
+            db.addMeme(
+                filename = fname,
+                fileHash = rentry.optString("sha256", ""),
+                width = dims.first,
+                height = dims.second,
+                fileSize = localFile.length(),
+                mimeType = "image/${fname.substringAfterLast('.', "png").lowercase()}",
+                originalName = oname
+            )
+        }
+        if (removeLocal) {
+            var removed = 0
+            val thumbs = StoragePaths.thumbnailDir(ctx)
+            for (fname in local.keys) {
+                if (fname in remote) continue
+                val row = db.getByFilename(fname)
+                if (row != null) {
+                    thumbs.listFiles()?.forEach { t ->
+                        if (t.name.startsWith("${row.id}_")) t.delete()
+                    }
+                    db.deleteMeme(row.id)
+                }
+                val f = File(cacheDir, fname)
+                if (f.exists() && f.delete()) removed++
+            }
+            return SyncResult(
+                downloaded = downloaded, skipped = skipped, errors = errors,
+                removedLocal = removed, failed = failed
+            )
+        }
+        applyRemoteCollections(ctx, data)
+        if (errors > 0) {
+            throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
+        }
+        android.util.Log.d(TAG, "pull done downloaded=$downloaded skipped=$skipped")
+        return SyncResult(downloaded = downloaded, skipped = skipped, errors = 0, failed = failed)
+    }
+
+    private fun pullWorker(
+        ctx: Context,
+        chunk: List<Map.Entry<String, JSONObject>>,
+        root: String,
+        cacheDir: File,
+        local: Map<String, JSONObject>,
+        progress: SyncProgress?
+    ): WorkerResult {
+        val cfg = ConfigStore.get(ctx)
         val bk = createBackend(cfg)
+        var done = 0
+        var errors = 0
+        val failed = mutableListOf<String>()
         try {
             bk.connect()
-            val data = downloadIndex(ctx, bk, cfg) ?: throw SyncError("no remote manifest available")
-            val remote = parseMemes(data)
-            val local = entriesFromDb(ctx)
-            var downloaded = 0
-            var skipped = 0
-            var errors = 0
-            val failed = mutableListOf<String>()
-            for ((fname, rentry) in remote) {
-                val localEntry = local[fname]
+            for ((fname, rentry) in chunk) {
                 val localFile = File(cacheDir, fname)
-                if (localEntry != null &&
-                    localEntry.optString("sha256", "") == rentry.optString("sha256", "") &&
+                if (local[fname]?.optString("sha256", "") == rentry.optString("sha256", "") &&
                     localFile.exists()
                 ) {
-                    skipped++
+                    done++
+                    progress?.report(0, fname)
                     continue
                 }
                 if (bk.downloadFile(remoteMemePath(root, fname), localFile)) {
@@ -932,55 +1155,28 @@ object CloudSync {
                         errors++
                         failed.add(fname)
                         localFile.delete()
+                        progress?.report(0, fname)
                         continue
                     }
-                    if (db.getByFilename(fname) == null) {
-                        val dims = readDimensions(localFile)
-                        val oname = rentry.optString("name", "").ifEmpty { fname.substringBeforeLast('.') }
-                        db.addMeme(
-                            filename = fname,
-                            fileHash = rentry.optString("sha256", ""),
-                            width = dims.first,
-                            height = dims.second,
-                            fileSize = localFile.length(),
-                            mimeType = "image/${fname.substringAfterLast('.', "png").lowercase()}",
-                            originalName = oname
-                        )
-                    }
-                    downloaded++
+                    done++
+                    progress?.report(localFile.length(), fname)
                 } else {
                     errors++
                     failed.add(fname)
+                    progress?.report(0, fname)
                 }
             }
-            if (removeLocal) {
-                var removed = 0
-                val thumbs = StoragePaths.thumbnailDir(ctx)
-                for (fname in local.keys) {
-                    if (fname in remote) continue
-                    val row = db.getByFilename(fname)
-                    if (row != null) {
-                        thumbs.listFiles()?.forEach { t ->
-                            if (t.name.startsWith("${row.id}_")) t.delete()
-                        }
-                        db.deleteMeme(row.id)
-                    }
-                    val f = File(cacheDir, fname)
-                    if (f.exists() && f.delete()) removed++
-                }
-                return SyncResult(
-                    downloaded = downloaded, skipped = skipped, errors = errors,
-                    removedLocal = removed, failed = failed
-                )
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "pull worker failed: $e")
+            val remaining = chunk.size - done - errors
+            if (remaining > 0) {
+                errors += remaining
+                failed.add("$remaining 个文件因 worker 中断未处理")
             }
-            applyRemoteCollections(ctx, data)
-            if (errors > 0) {
-                throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
-            }
-            return SyncResult(downloaded = downloaded, skipped = skipped, errors = 0, failed = failed)
         } finally {
             bk.close()
         }
+        return WorkerResult(done, errors, failed)
     }
 
     fun deleteAllRemote(ctx: Context): Pair<Boolean, String> {
@@ -998,6 +1194,41 @@ object CloudSync {
                 }
                 bk.deleteFile(remoteIndexPath(root))
                 return true to "已删除 $count 个远端文件"
+            } finally {
+                bk.close()
+            }
+        } catch (e: Exception) {
+            false to (e.message ?: "unknown error")
+        }
+    }
+
+    fun cleanupRemoteOrphans(ctx: Context, delete: Boolean = false): Pair<Boolean, String> {
+        return try {
+            val cfg = ConfigStore.get(ctx)
+            val root = remoteRoot(cfg)
+            val bk = createBackend(cfg)
+            try {
+                bk.connect()
+                val memeDir = root.trimEnd('/') + "/" + REMOTE_MEME_DIR
+                val remoteFiles = try {
+                    bk.listFiles(memeDir)
+                } catch (e: NotImplementedError) {
+                    emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                val data = downloadIndex(ctx, bk, cfg)
+                val remoteMemes = if (data != null) parseMemes(data).keys else emptySet()
+                val orphans = remoteFiles.filter { it !in remoteMemes }
+                var removed = 0
+                if (delete) {
+                    for (fname in orphans) {
+                        if (bk.deleteFile(remoteMemePath(root, fname))) removed++
+                    }
+                }
+                val msg = if (delete) "已删除 $removed 个孤儿文件（共 ${orphans.size}）"
+                else "发现孤儿文件 ${orphans.size} 个"
+                true to msg
             } finally {
                 bk.close()
             }

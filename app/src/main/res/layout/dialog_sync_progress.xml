@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_card"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/sync_progress_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:text="@string/sync_pushing"
+        android:textColor="@color/fg"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/sync_progress_file"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:ellipsize="middle"
+        android:gravity="center"
+        android:maxLines="1"
+        android:text="@string/sync_preparing"
+        android:textColor="@color/fg_secondary"
+        android:textSize="12sp" />
+
+    <ProgressBar
+        android:id="@+id/sync_progress_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="8dp"
+        android:layout_marginBottom="6dp"
+        android:max="100"
+        android:progressTint="@color/accent"
+        android:progressBackgroundTint="@color/bg" />
+
+    <TextView
+        android:id="@+id/sync_progress_pct"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="0%"
+        android:textColor="@color/muted"
+        android:textSize="11.5sp" />
+
+    <TextView
+        android:id="@+id/btn_sync_bg"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/btn_secondary"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="6dp"
+        android:text="@string/sync_bg_run"
+        android:textColor="@color/fg_secondary"
+        android:textSize="12.5sp" />
+</LinearLayout>

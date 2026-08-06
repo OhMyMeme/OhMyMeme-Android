@@ -9,12 +9,24 @@ class MemeDb(context: Context) {
     private val db: SQLiteDatabase
 
     companion object {
+        private const val TAG = "OhMyMeme/MemeDb"
+
         @Volatile
         private var instance: MemeDb? = null
 
         fun get(context: Context): MemeDb {
             return instance ?: synchronized(this) {
                 instance ?: MemeDb(context.applicationContext).also { instance = it }
+            }
+        }
+
+        fun close() {
+            synchronized(this) {
+                instance?.let {
+                    android.util.Log.d(TAG, "closing database")
+                    it.db.close()
+                    instance = null
+                }
             }
         }
     }
@@ -27,6 +39,7 @@ class MemeDb(context: Context) {
         )
         db.enableWriteAheadLogging()
         initSchema()
+        android.util.Log.d(TAG, "opened ${db.path}")
     }
 
     private fun initSchema() {
@@ -145,11 +158,13 @@ class MemeDb(context: Context) {
         if (id != -1L && tags != null) {
             setMemeTags(id, tags)
         }
+        android.util.Log.d(TAG, "addMeme id=$id filename=$filename")
         return id
     }
 
     fun deleteMeme(memeId: Long) {
         db.delete("memes", "id=?", arrayOf(memeId.toString()))
+        android.util.Log.d(TAG, "deleteMeme id=$memeId")
     }
 
     fun updateMeme(memeId: Long, updates: Map<String, Any>) {
@@ -424,6 +439,7 @@ class MemeDb(context: Context) {
             "INSERT OR REPLACE INTO recent_uses (meme_id, used_at) VALUES (?, datetime('now','localtime'))",
             arrayOf(memeId)
         )
+        android.util.Log.d(TAG, "recordUse id=$memeId")
     }
 
     fun removeFromRecent(memeId: Long) {
@@ -437,6 +453,7 @@ class MemeDb(context: Context) {
         db.execSQL("DELETE FROM memes")
         db.execSQL("DELETE FROM collections")
         db.execSQL("DELETE FROM tags")
+        android.util.Log.d(TAG, "deleteAll")
     }
 
     fun reorderMemes(memeIds: List<Long>) {

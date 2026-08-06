@@ -10,6 +10,7 @@ import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.EditText
 import android.widget.PopupMenu
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,11 +23,23 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
-    private data class CollectionEntry(val id: Long, val name: String, val count: Int)
+    private val TAG = "OhMyMeme/MainActivity"
+
+    private data class CollectionEntry(
+        val id: Long,
+        val name: String,
+        val count: Int,
+        val hasChildren: Boolean = false
+    )
+
+    private data class CollectionNode(
+        val entry: CollectionEntry,
+        val children: List<CollectionNode>
+    )
 
     private val executor = Executors.newSingleThreadExecutor()
+    private val syncExecutor = Executors.newSingleThreadExecutor()
     private var currentKeyword = ""
-    private val activeTags = mutableSetOf<String>()
     private var activeCollectionId: Long? = null
 
     companion object {
@@ -56,6 +69,28 @@ class MainActivity : AppCompatActivity() {
         setupBars()
         setupSearch()
         ensureFirstRunSetup()
+        autoSyncIfConfigured()
+    }
+
+    private fun autoSyncIfConfigured() {
+        if (StoragePaths.isFirstRun(this)) return
+        val cfg = ConfigStore.get(this)
+        val syncType = cfg.optString("sync_type", "")
+        val autoFetch = cfg.optBoolean("sync_auto_fetch_index", false)
+        val autoSync = cfg.optBoolean("sync_auto_sync", false)
+        if (syncType.isEmpty() || (!autoFetch && !autoSync)) return
+        executor.execute {
+            try {
+                if (autoSync) {
+                    CloudSync.pull(this)
+                } else if (autoFetch) {
+                    CloudSync.checkSyncStatus(this)
+                }
+                runOnUiThread { reloadData() }
+            } catch (e: Exception) {
+                runOnUiThread { toast(e.message ?: getString(R.string.sync_failed)) }
+            }
+        }
     }
 
     private fun ensureFirstRunSetup() {
@@ -94,6 +129,116 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_settings).setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
+        findViewById<View>(R.id.btn_upload).setOnClickListener { quickSync(isUpload = true) }
+        findViewById<View>(R.id.btn_download).setOnClickListener { quickSync(isUpload = false) }
+    }
+
+    private fun quickSync(isUpload: Boolean) {
+        val cfg = ConfigStore.get(this)
+        if (cfg.optString("sync_type", "").isEmpty()) {
+            toast(getString(R.string.sync_not_configured))
+            return
+        }
+        val showProgress = cfg.optBoolean(
+            if (isUpload) "show_upload_progress" else "show_download_progress", true
+        )
+        val showDone = cfg.optBoolean(
+            if (isUpload) "show_upload_done" else "show_download_done", true
+        )
+        val titleRes = if (isUpload) R.string.sync_pushing else R.string.sync_pulling
+        val doneTitleRes = if (isUpload) R.string.sync_upload_done_title else R.string.sync_download_done_title
+
+        val syncProgress = CloudSync.SyncProgress()
+        var dialog: AlertDialog? = null
+        var inBackground = false
+        if (showProgress) {
+            val view = layoutInflater.inflate(R.layout.dialog_sync_progress, null)
+            view.findViewById<TextView>(R.id.sync_progress_title).text = getString(titleRes)
+            val bar = view.findViewById<ProgressBar>(R.id.sync_progress_bar)
+            val pct = view.findViewById<TextView>(R.id.sync_progress_pct)
+            val file = view.findViewById<TextView>(R.id.sync_progress_file)
+            view.findViewById<TextView>(R.id.btn_sync_bg).setOnClickListener {
+                inBackground = true
+                dialog?.dismiss()
+                dialog = null
+            }
+            syncProgress.onProgress = { p ->
+                runOnUiThread {
+                    if (inBackground || dialog == null) return@runOnUiThread
+                    val percent = if (p.filesTotal > 0) p.done() * 100 / p.filesTotal else 0
+                    bar.progress = percent
+                    pct.text = "$percent% · ${formatSpeed(p.bytesDone(), p.startTime)}"
+                    file.text = p.currentFile
+                }
+            }
+            dialog = AlertDialog.Builder(this)
+                .setView(view)
+                .setCancelable(false)
+                .create()
+            dialog?.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            dialog?.show()
+        }
+        syncExecutor.execute {
+            try {
+                val result = if (isUpload) CloudSync.push(this, syncProgress)
+                else CloudSync.pull(this, syncProgress)
+                android.util.Log.d(TAG, "quickSync ${if (isUpload) "push" else "pull"} result=$result")
+                runOnUiThread {
+                    if (!isUpload) reloadData()
+                    if (!inBackground && showDone) {
+                        dialog?.dismiss()
+                        dialog = null
+                        showSyncDoneDialog(doneTitleRes, syncSummary(result))
+                        return@runOnUiThread
+                    }
+                    dialog?.dismiss()
+                    dialog = null
+                    toast(syncSummary(result))
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "quickSync ${if (isUpload) "push" else "pull"} failed: $e")
+                runOnUiThread {
+                    dialog?.dismiss()
+                    dialog = null
+                    toast(e.message ?: getString(R.string.sync_failed))
+                }
+            }
+        }
+    }
+
+    private fun formatSpeed(bytesDone: Long, startTime: Long): String {
+        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
+        if (elapsedSec <= 0.0) return "0 KB/s"
+        val bytesPerSec = bytesDone / elapsedSec
+        return if (bytesPerSec >= 1024.0 * 1024.0) {
+            String.format("%.1f MB/s", bytesPerSec / 1024.0 / 1024.0)
+        } else {
+            String.format("%.0f KB/s", bytesPerSec / 1024.0)
+        }
+    }
+
+    private fun showSyncDoneDialog(titleRes: Int, detail: String) {
+        val view = layoutInflater.inflate(R.layout.dialog_sync_done, null)
+        view.findViewById<TextView>(R.id.sync_done_title).text = getString(titleRes)
+        view.findViewById<TextView>(R.id.sync_done_detail).text = detail
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .setCancelable(false)
+            .create()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        view.findViewById<TextView>(R.id.btn_sync_done_close).setOnClickListener { dialog.dismiss() }
+        dialog.show()
+    }
+
+    private fun syncSummary(r: CloudSync.SyncResult): String {
+        val parts = mutableListOf<String>()
+        if (r.uploaded > 0) parts.add(getString(R.string.sync_uploaded, r.uploaded))
+        if (r.downloaded > 0) parts.add(getString(R.string.sync_downloaded, r.downloaded))
+        if (r.skipped > 0) parts.add(getString(R.string.sync_skipped, r.skipped))
+        if (r.deleted > 0) parts.add(getString(R.string.sync_deleted, r.deleted))
+        if (r.removedLocal > 0) parts.add(getString(R.string.sync_removed_local, r.removedLocal))
+        if (r.errors > 0) parts.add(getString(R.string.sync_errors, r.errors))
+        return if (parts.isEmpty()) getString(R.string.sync_done) else parts.joinToString("，")
     }
 
     private fun setupSearch() {
@@ -112,61 +257,182 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupBars() {
-        findViewById<RecyclerView>(R.id.rv_tags).let { rv ->
-            rv.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
-            rv.adapter = ChipAdapter(ChipStyle.TAG, emptyList<String>(), emptySet()) { it }
-        }
         findViewById<RecyclerView>(R.id.rv_collections).let { rv ->
             rv.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
-            rv.adapter = ChipAdapter(ChipStyle.COLLECTION, emptyList<CollectionEntry>(), emptySet()) { it.name }
+            rv.adapter = ChipAdapter(emptyList<CollectionEntry>(), emptySet()) { it.name }
         }
     }
 
     private fun reloadBars() {
         val db = MemeDb.get(this)
-        val tags = db.getAllTags()
-        activeTags.retainAll(tags)
-        findViewById<RecyclerView>(R.id.rv_tags).let { rv ->
-            rv.adapter = ChipAdapter(ChipStyle.TAG, tags, activeTags) { it }.apply {
-                onItemClick = { name -> toggleTag(name) }
+        val all = db.getCollections()
+        fun buildTree(parentId: Long?): List<CollectionNode> {
+            return all
+                .filter { c -> if (parentId == null) c.parentId == null || c.parentId == 0L else c.parentId == parentId }
+                .map { c ->
+                    val kids = buildTree(c.id)
+                    CollectionNode(
+                        CollectionEntry(c.id, c.name, db.count(collectionId = c.id), kids.isNotEmpty()),
+                        kids
+                    )
+                }
+        }
+        val top = buildTree(null)
+        val activePath = computeActivePath(all)
+        val display = mutableListOf<CollectionEntry>()
+        val favoritesCount = db.count(favoriteOnly = true)
+        if (favoritesCount > 0) {
+            display.add(CollectionEntry(COLLECTION_FAVORITES, getString(R.string.collection_favorites), favoritesCount))
+        }
+        val recentCount = db.getRecent(10000).size
+        if (recentCount > 0) {
+            display.add(CollectionEntry(COLLECTION_RECENT, getString(R.string.collection_recent), recentCount))
+        }
+        fun flatten(items: List<CollectionNode>, parentActive: Boolean) {
+            items.forEach { node ->
+                val entry = node.entry
+                if (entry.count == 0 && node.children.isEmpty()) return@forEach
+                display.add(entry)
+                if (parentActive || activeCollectionId == entry.id || activePath.contains(entry.id)) {
+                    if (node.children.isNotEmpty()) flatten(node.children, activeCollectionId == entry.id)
+                }
             }
         }
-        val collections = mutableListOf(
-            CollectionEntry(COLLECTION_FAVORITES, getString(R.string.collection_favorites), db.count(favoriteOnly = true)),
-            CollectionEntry(COLLECTION_RECENT, getString(R.string.collection_recent), db.getRecent(10000).size)
-        )
-        db.getCollections().forEach { c ->
-            collections.add(CollectionEntry(c.id, c.name, db.count(collectionId = c.id)))
-        }
-        if (activeCollectionId != null && activeCollectionId != COLLECTION_FAVORITES &&
-            activeCollectionId != COLLECTION_RECENT && collections.none { it.id == activeCollectionId }
-        ) {
-            activeCollectionId = null
-        }
-        val display = collections.filter { it.count > 0 }
+        flatten(top, false)
         val active = display.firstOrNull { it.id == activeCollectionId }
         if (activeCollectionId != null && active == null) {
             activeCollectionId = null
         }
+        val activeSet = display.filter {
+            it.id == activeCollectionId || activePath.contains(it.id)
+        }.toSet()
         findViewById<RecyclerView>(R.id.rv_collections).let { rv ->
             rv.adapter = ChipAdapter(
-                ChipStyle.COLLECTION,
                 display,
-                if (active != null) setOf(active) else emptySet()
-            ) { if (it.count > 0) "${it.name} (${it.count})" else it.name }.apply {
-                onItemClick = { entry -> toggleCollection(entry) }
+                activeSet
+            ) { entry ->
+                var label = entry.name
+                if (entry.count > 0) label += " (${entry.count})"
+                if (entry.hasChildren) label += " \u25BC"
+                label
+            }.apply {
+                onItemClick = { e -> toggleCollection(e) }
+                onItemLongClick = { e -> showCollectionMenu(e) }
             }
         }
     }
 
-    private fun toggleTag(name: String) {
-        if (!activeTags.add(name)) activeTags.remove(name)
-        reloadData()
+    private fun computeActivePath(all: List<MemeDb.Collection>): Set<Long> {
+        val path = mutableSetOf<Long>()
+        var cur = activeCollectionId ?: return path
+        var guard = 0
+        while (cur > 0 && guard++ < 16) {
+            val parent = all.firstOrNull { it.id == cur }?.parentId
+            if (parent == null || parent == 0L) break
+            path.add(parent)
+            cur = parent
+        }
+        return path
+    }
+
+    private fun showCollectionMenu(entry: CollectionEntry) {
+        if (entry.id <= 0) return
+        promptCreateSubcollection(entry)
+    }
+
+    private fun promptCreateSubcollection(entry: CollectionEntry) {
+        val db = MemeDb.get(this)
+        if (db.getCollectionDepth(entry.id) >= 1) {
+            toast(getString(R.string.subcollection_depth_limit))
+            return
+        }
+        val input = EditText(this)
+        input.hint = getString(R.string.add_collection_hint)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.new_subcollection_title))
+            .setView(input)
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    toast(getString(R.string.input_empty))
+                    return@setPositiveButton
+                }
+                executor.execute {
+                    MemeDb.get(this).createCollection(name, entry.id)
+                    runOnUiThread {
+                        toast(getString(R.string.subcollection_created))
+                        reloadData()
+                    }
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
     private fun toggleCollection(entry: CollectionEntry) {
         activeCollectionId = if (activeCollectionId == entry.id) null else entry.id
         reloadData()
+    }
+
+    private fun promptAddToSubgroup(meme: Meme) {
+        val targetCol = activeCollectionId ?: return
+        if (targetCol <= 0) return
+        val db = MemeDb.get(this)
+        val children = db.getChildCollections(targetCol)
+        val labels = mutableListOf(getString(R.string.new_subcollection_title))
+        val ids = mutableListOf<Long?>(-1L)
+        children.forEach { child ->
+            labels.add(child.name)
+            ids.add(child.id)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.ctx_add_subgroup))
+            .setItems(labels.toTypedArray()) { _, which ->
+                val pickedId = ids[which]
+                if (pickedId == -1L) {
+                    promptCreateSubcollectionFor(meme, targetCol)
+                } else if (pickedId != null) {
+                    executor.execute {
+                        MemeDb.get(this).addToCollection(meme.id, pickedId)
+                        runOnUiThread {
+                            toast(getString(R.string.added_to_collection, labels[which]))
+                            reloadData()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun promptCreateSubcollectionFor(meme: Meme, parentId: Long) {
+        val input = EditText(this)
+        input.hint = getString(R.string.add_collection_hint)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.new_subcollection_title))
+            .setView(input)
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    toast(getString(R.string.input_empty))
+                    return@setPositiveButton
+                }
+                executor.execute {
+                    val db = MemeDb.get(this)
+                    if (db.getCollectionDepth(parentId) >= 1) {
+                        runOnUiThread { toast(getString(R.string.subcollection_depth_limit)) }
+                        return@execute
+                    }
+                    val cid = db.createCollection(name, parentId)
+                    db.addToCollection(meme.id, cid)
+                    runOnUiThread {
+                        toast(getString(R.string.added_to_collection, name))
+                        reloadData()
+                    }
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
     private fun reloadData() {
@@ -176,26 +442,26 @@ class MainActivity : AppCompatActivity() {
             val memes = when {
                 activeCollectionId == COLLECTION_FAVORITES -> db.search(
                     keyword = currentKeyword,
-                    tags = if (activeTags.isEmpty()) null else activeTags.toList(),
                     favoriteOnly = true,
                     offset = 0,
                     limit = 10000
                 )
                 activeCollectionId == COLLECTION_RECENT -> db.getRecent(10000)
-                currentKeyword.isEmpty() && activeTags.isEmpty() && activeCollectionId == null ->
+                currentKeyword.isEmpty() && activeCollectionId == null ->
                     db.getAll(limit = 10000)
                 else -> db.search(
                     keyword = currentKeyword,
-                    tags = if (activeTags.isEmpty()) null else activeTags.toList(),
                     collectionId = activeCollectionId,
                     offset = 0,
                     limit = 10000
                 )
             }
+            android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$currentKeyword'")
             runOnUiThread {
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
                     rv.layoutManager = GridLayoutManager(this, 3)
                     rv.adapter = MemeGridAdapter(this, memes).apply {
+                        onItemClick = { _, meme -> recordUse(meme) }
                         onLongClick = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                 }
@@ -212,6 +478,8 @@ class MainActivity : AppCompatActivity() {
         popup.menu.findItem(R.id.act_favorite).setTitle(
             if (favorited) getString(R.string.ctx_unfavorite) else getString(R.string.ctx_favorite)
         )
+        popup.menu.findItem(R.id.act_add_subgroup).isVisible =
+            activeCollectionId != null && activeCollectionId!! > 0
         popup.menu.findItem(R.id.act_remove_collection).isVisible =
             activeCollectionId != null && activeCollectionId!! > 0
         popup.menu.findItem(R.id.act_remove_recent).isVisible =
@@ -221,6 +489,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.act_rename -> promptRename(meme)
                 R.id.act_favorite -> toggleFavorite(meme)
                 R.id.act_add_collection -> promptAddCollection(meme)
+                R.id.act_add_subgroup -> promptAddToSubgroup(meme)
                 R.id.act_remove_collection -> removeFromCollection(meme)
                 R.id.act_remove_recent -> removeFromRecent(meme)
                 R.id.act_delete -> confirmDelete(meme)
@@ -311,6 +580,17 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(getString(R.string.cancel), null)
             .show()
+    }
+
+    private fun recordUse(meme: Meme) {
+        executor.execute {
+            MemeDb.get(this).recordUse(meme.id)
+            val recentEmpty = activeCollectionId == COLLECTION_RECENT && MemeDb.get(this).getRecent(1).isEmpty()
+            runOnUiThread {
+                if (recentEmpty) activeCollectionId = null
+                reloadData()
+            }
+        }
     }
 
     private fun removeFromRecent(meme: Meme) {

@@ -7,6 +7,8 @@ import java.io.File
 
 object Thumbnailer {
 
+    private const val TAG = "OhMyMeme/Thumbnailer"
+
     fun getThumbPath(context: Context, memeId: Long, filename: String, size: Int = 150): String? {
         val thumbDir = StoragePaths.thumbnailDir(context)
         val thumbPath = File(thumbDir, "${memeId}_${size}.png")
@@ -19,8 +21,10 @@ object Thumbnailer {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
             }
             bitmap.recycle()
+            android.util.Log.d(TAG, "generated $thumbPath for $filename")
             thumbPath.absolutePath
         } catch (e: Exception) {
+            android.util.Log.w(TAG, "thumb failed for $filename: $e")
             null
         }
     }
