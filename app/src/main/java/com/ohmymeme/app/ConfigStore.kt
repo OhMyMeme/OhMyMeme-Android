@@ -13,7 +13,8 @@ object ConfigStore {
         "r2_access_key_id",
         "r2_secret_access_key",
         "ftp_password",
-        "webdav_password"
+        "webdav_password",
+        "lan_secret"
     )
 
     val DEFAULTS: Map<String, Any> = mapOf(
@@ -63,7 +64,9 @@ object ConfigStore {
         "window_x" to -1,
         "window_y" to -1,
         "auto_play_gif" to true,
-        "try_original_image" to false
+        "try_original_image" to false,
+        "lan_port" to 17852,
+        "lan_secret" to ""
     )
 
     @Volatile
@@ -93,6 +96,8 @@ object ConfigStore {
             data = null
         }
     }
+
+    internal fun isSecretKey(key: String): Boolean = key in SECRET_KEYS
 
     private fun load(context: Context): JSONObject {
         val obj = JSONObject()

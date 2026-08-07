@@ -973,6 +973,183 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:text="@string/lan_section"
+                android:textColor="@color/fg"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="4dp"
+                android:text="@string/lan_note"
+                android:textColor="@color/muted"
+                android:textSize="11.5sp"
+                android:lineSpacingExtra="2dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/lan_port"
+                    android:textColor="@color/fg_secondary"
+                    android:textSize="12.5sp" />
+
+                <EditText
+                    android:id="@+id/et_lan_port"
+                    android:layout_width="100dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_input"
+                    android:digits="0123456789"
+                    android:inputType="number"
+                    android:maxLength="5"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/fg"
+                    android:textColorHint="@color/muted"
+                    android:textSize="12.5sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="2dp"
+                android:paddingBottom="4dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/lan_secret"
+                    android:textColor="@color/fg_secondary"
+                    android:textSize="12.5sp" />
+
+                <EditText
+                    android:id="@+id/et_lan_secret"
+                    android:layout_width="150dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_input"
+                    android:hint="@string/lan_secret_hint"
+                    android:inputType="textPassword"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/fg"
+                    android:textColorHint="@color/muted"
+                    android:textSize="12.5sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_lan_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="4dp"
+                android:textColor="@color/muted"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <TextView
+                    android:id="@+id/btn_lan_scan"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_scan"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_connect"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_primary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_connect"
+                    android:textColor="@color/white"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <TextView
+                    android:id="@+id/btn_lan_pull"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_pull"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_push"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_push"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_config"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_config"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_lan_result"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/fg_secondary"
+                android:textSize="12sp"
+                android:lineSpacingExtra="2dp"
+                android:visibility="gone" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:background="@color/border" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
                 android:text="@string/version_title"
                 android:textColor="@color/fg"
                 android:textSize="13sp"

@@ -39,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
         setupButtons()
         setupExportLogs()
         setupStorage()
+        setupLan()
     }
 
     private fun setupTitle() {
@@ -63,6 +64,12 @@ class SettingsActivity : AppCompatActivity() {
     private fun finishWithResult() {
         setResult(RESULT_OK)
         finish()
+    }
+
+    override fun onDestroy() {
+        lanConnection?.close()
+        lanConnection = null
+        super.onDestroy()
     }
 
     private fun setupSpinners() {
@@ -174,6 +181,8 @@ class SettingsActivity : AppCompatActivity() {
         setText(R.id.et_wd_user, cfg.optString("webdav_user", ""))
         setText(R.id.et_wd_pass, cfg.optString("webdav_password", ""))
         setText(R.id.et_wd_path, cfg.optString("webdav_path", ""))
+        setText(R.id.et_lan_port, cfg.optInt("lan_port", 17852).toString())
+        setText(R.id.et_lan_secret, cfg.optString("lan_secret", ""))
     }
 
     private fun setText(id: Int, value: String) {
@@ -275,6 +284,151 @@ class SettingsActivity : AppCompatActivity() {
     private fun applyNewStorageDir(dir: File) {
         StoragePaths.setDataDir(this, dir)
         ConfigStore.invalidate()
+    }
+
+    // ─── 局域网互联 ───
+
+    private var lanConnection: LanClient.LanConnection? = null
+    private var discoveredPeers: List<LanClient.LanPeer> = emptyList()
+
+    private fun setupLan() {
+        findViewById<TextView>(R.id.tv_lan_status).text = getString(R.string.lan_status_disconnected)
+        findViewById<TextView>(R.id.btn_lan_scan).setOnClickListener { scanLan() }
+        findViewById<TextView>(R.id.btn_lan_connect).setOnClickListener { connectLan() }
+        findViewById<TextView>(R.id.btn_lan_pull).setOnClickListener {
+            lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { LanClient.pull(this, it) }
+        }
+        findViewById<TextView>(R.id.btn_lan_push).setOnClickListener {
+            lanOp(R.id.btn_lan_push, getString(R.string.btn_lan_push)) { LanClient.push(this, it) }
+        }
+        findViewById<TextView>(R.id.btn_lan_config).setOnClickListener {
+            val conn = lanConnection
+            if (conn == null) {
+                toast(getString(R.string.lan_status_disconnected))
+                return@setOnClickListener
+            }
+            Thread {
+                try {
+                    LanClient.pushConfig(this, conn)
+                    runOnUiThread { toast(getString(R.string.lan_config_pushed)) }
+                } catch (e: Exception) {
+                    runOnUiThread { toast(e.message ?: "同步配置失败") }
+                }
+            }.start()
+        }
+    }
+
+    private fun scanLan() {
+        val btn = findViewById<TextView>(R.id.btn_lan_scan)
+        btn.isEnabled = false
+        btn.text = getString(R.string.lan_scanning)
+        Thread {
+            val port = textOf(R.id.et_lan_port).toIntOrNull() ?: LanClient.DEFAULT_PORT
+            val peers = LanClient.discover(this, port)
+            runOnUiThread {
+                btn.isEnabled = true
+                btn.text = getString(R.string.btn_lan_scan)
+                discoveredPeers = peers
+                val result = findViewById<TextView>(R.id.tv_lan_result)
+                if (peers.isEmpty()) {
+                    result.visibility = View.VISIBLE
+                    result.text = getString(R.string.lan_scan_none)
+                } else {
+                    result.visibility = View.VISIBLE
+                    result.text = getString(R.string.lan_scan_found, peers.size) + "\n" +
+                        peers.mapIndexed { i, p ->
+                            "${i + 1}. ${p.name}（${p.os} ${p.ver}）" +
+                                if (p.needSecret) " 🔒" else ""
+                        }.joinToString("\n")
+                }
+            }
+        }.start()
+    }
+
+    private fun connectLan() {
+        val conn = lanConnection
+        if (conn != null) {
+            conn.close()
+            lanConnection = null
+            findViewById<TextView>(R.id.tv_lan_status).text = getString(R.string.lan_status_disconnected)
+            findViewById<TextView>(R.id.btn_lan_connect).text = getString(R.string.btn_lan_connect)
+            toast(getString(R.string.lan_status_disconnected))
+            return
+        }
+        val peers = discoveredPeers
+        if (peers.isEmpty()) {
+            toast(getString(R.string.lan_scan_none))
+            return
+        }
+        val labels = peers.map { "${it.name}（${it.os} ${it.ver}）" }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lan_pick_peer))
+            .setItems(labels) { _, which ->
+                doConnect(peers[which])
+            }
+            .show()
+    }
+
+    private fun doConnect(peer: LanClient.LanPeer) {
+        val btn = findViewById<TextView>(R.id.btn_lan_connect)
+        btn.isEnabled = false
+        btn.text = getString(R.string.lan_connecting)
+        val secret = textOf(R.id.et_lan_secret)
+        Thread {
+            try {
+                val conn = LanClient.connect(peer.ip, peer.port, secret)
+                lanConnection?.close()
+                lanConnection = conn
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_lan_disconnect)
+                    findViewById<TextView>(R.id.tv_lan_status).text =
+                        getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver)
+                    toast(getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver))
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_lan_connect)
+                    toast(e.message ?: "连接失败")
+                }
+            }
+        }.start()
+    }
+
+    private fun lanOp(btnId: Int, label: String, block: (LanClient.LanConnection) -> LanClient.LanResult) {
+        val conn = lanConnection
+        if (conn == null) {
+            toast(getString(R.string.lan_status_disconnected))
+            return
+        }
+        val btn = findViewById<TextView>(btnId)
+        btn.isEnabled = false
+        btn.text = label
+        Thread {
+            val result = try {
+                block(conn)
+            } catch (e: Exception) {
+                LanClient.LanResult(errors = 1, failed = listOf(e.message ?: "操作失败"))
+            }
+            runOnUiThread {
+                btn.isEnabled = true
+                btn.text = when (btnId) {
+                    R.id.btn_lan_pull -> getString(R.string.btn_lan_pull)
+                    R.id.btn_lan_push -> getString(R.string.btn_lan_push)
+                    else -> getString(R.string.btn_lan_config)
+                }
+                if (result.pulled > 0) {
+                    toast(getString(R.string.lan_pull_done, result.pulled, result.skipped, result.errors))
+                } else if (result.pushed > 0) {
+                    toast(getString(R.string.lan_push_done, result.pushed, result.skipped, result.errors))
+                } else if (result.errors > 0) {
+                    toast(result.failed.firstOrNull() ?: "操作失败")
+                } else {
+                    toast(getString(R.string.lan_pull_done, 0, result.skipped, 0))
+                }
+            }
+        }.start()
     }
 
     private fun setupExportLogs() {
@@ -476,6 +630,8 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "webdav_user", textOf(R.id.et_wd_user))
         ConfigStore.set(this, "webdav_password", textOf(R.id.et_wd_pass))
         ConfigStore.set(this, "webdav_path", textOf(R.id.et_wd_path))
+        ConfigStore.set(this, "lan_port", textOf(R.id.et_lan_port).toIntOrNull() ?: 17852)
+        ConfigStore.set(this, "lan_secret", textOf(R.id.et_lan_secret))
 
         ConfigStore.save(this)
         ConfigStore.reload(this)
