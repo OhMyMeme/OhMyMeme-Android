@@ -19,6 +19,9 @@
     <string name="scan_done">缓存扫描完成，新增 %1$d 个</string>
     <string name="empty_title">还没有表情包</string>
     <string name="empty_hint">点击「导入」添加</string>
+    <string name="share_title">分享表情包</string>
+    <string name="share_file_missing">表情包文件不存在，无法分享</string>
+    <string name="share_failed">分享失败</string>
 
     <string name="badge_gif">GIF</string>
     <string name="badge_webp">WebP</string>

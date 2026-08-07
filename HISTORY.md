@@ -1,3 +1,19 @@
+# v0.3.0 — 点击分享 / 接收分享导入 / 同步顺序修复
+
+## 新增
+
+- **点击分享** — 点击表情卡片不再复制（手机端无意义），改为经系统分享面板把原图分享到微信/QQ 等应用：后台把原图复制到内部 cache → `FileProvider`（`file_paths.xml` 缓存路径）生成 content:// URI → `ACTION_SEND` + `Intent.createChooser`；分享同时 `recordUse` 记入最近使用，与桌面端 webui 点击动作对齐
+- **接收分享导入** — 从任意应用（微信/QQ/浏览器等）分享图片到 OhMyMeme 即可直接导入：`MainActivity` 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter + `launchMode="singleTop"`，`onCreate`/`onNewIntent` 提取 `EXTRA_STREAM` URI 列表直接 `doImport`，复用去重/魔数识别/隐写解码全链路
+- **同步顺序闭环** — pull 后按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`applyRemoteOrder` → `reorderMemes`，`isSafeRemoteFname` 校验文件名防路径穿越），保留云端排序，避免本地乱序再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，`sync_remove_local` 分支也执行）
+
+## 变更
+
+- **版本号** — versionCode 3 / versionName 0.3.0
+
+## 修复
+
+- **云端无法保存表情包顺序** — 对齐桌面端 3c62ed8：Android 此前 pull 不写回远端顺序，跨设备再 push 会用本地插入顺序覆盖云端排序，现 pull 无条件应用远端 manifest 顺序
+
 # v0.2.0 — 云端同步增强 / 拖拽排序 / 小分组 / 隐写 GIF 导入
 
 ## 新增
