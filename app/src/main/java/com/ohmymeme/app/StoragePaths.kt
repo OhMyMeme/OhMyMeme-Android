@@ -8,6 +8,7 @@ import java.io.File
 
 object StoragePaths {
 
+    private const val TAG = "OhMyMeme/StoragePaths"
     private const val PREFS = "ohmymeme_prefs"
     private const val KEY_DATA_DIR = "data_dir"
     private const val KEY_SETUP_DONE = "setup_done"
@@ -45,6 +46,7 @@ object StoragePaths {
         dir.mkdirs()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_DATA_DIR, dir.absolutePath).apply()
+        android.util.Log.d(TAG, "setDataDir ${dir.absolutePath}")
     }
 
     /**

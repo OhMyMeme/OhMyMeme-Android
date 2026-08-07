@@ -1,5 +1,5 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.OhMyMeme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.OhMyMeme" parent="Theme.MaterialComponents.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/white</item>
         <item name="colorSecondary">@color/accent</item>
@@ -9,5 +9,28 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:textColor">@color/fg</item>
         <item name="android:textColorHint">@color/muted</item>
+        <item name="android:alertDialogTheme">@style/AlertDialog.OhMyMeme</item>
+        <item name="popupMenuStyle">@style/PopupMenu.OhMyMeme</item>
+    </style>
+
+    <style name="AlertDialog.OhMyMeme" parent="Theme.MaterialComponents.Dialog.Alert">
+        <item name="android:background">@color/card</item>
+        <item name="android:textColor">@color/fg</item>
+        <item name="android:textColorPrimary">@color/fg</item>
+        <item name="buttonBarPositiveButtonStyle">@style/PositiveButton.OhMyMeme</item>
+        <item name="buttonBarNegativeButtonStyle">@style/NegativeButton.OhMyMeme</item>
+    </style>
+
+    <style name="PopupMenu.OhMyMeme" parent="Widget.MaterialComponents.PopupMenu">
+        <item name="android:popupBackground">@color/card</item>
+        <item name="android:textColor">@color/fg</item>
+    </style>
+
+    <style name="PositiveButton.OhMyMeme" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/accent</item>
+    </style>
+
+    <style name="NegativeButton.OhMyMeme" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/muted</item>
     </style>
 </resources>

@@ -5,10 +5,15 @@ import java.io.File
 
 object CacheScanner {
 
+    private const val TAG = "OhMyMeme/CacheScanner"
+
     fun scan(context: Context): Int {
         val db = MemeDb.get(context)
         val cacheDir = StoragePaths.cacheDir(context)
-        if (!cacheDir.exists()) return 0
+        if (!cacheDir.exists()) {
+            android.util.Log.d(TAG, "cache dir missing, skipped")
+            return 0
+        }
         var added = 0
         cacheDir.walkTopDown().forEach { f ->
             if (f.isDirectory) return@forEach
@@ -39,6 +44,7 @@ object CacheScanner {
             )
             added++
         }
+        android.util.Log.d(TAG, "scan finished, added=$added")
         return added
     }
 

@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:orientation="vertical">
+    <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:app="http://schemas.android.com/apk/res-auto"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg"
+        android:fitsSystemWindows="true"
+        android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -30,10 +32,45 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
+        <ImageView
+            android:id="@+id/btn_sort"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/action_sort"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_sort"
+            app:tint="@color/muted" />
+
+        <ImageView
+            android:id="@+id/btn_upload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/btn_sync_push"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_upload"
+            app:tint="@color/muted" />
+
+        <ImageView
+            android:id="@+id/btn_download"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/btn_sync_pull"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_download"
+            app:tint="@color/muted" />
+
         <TextView
             android:id="@+id/btn_import"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:background="@drawable/bg_title_btn"
             android:paddingHorizontal="12dp"
             android:paddingVertical="5dp"
@@ -41,27 +78,27 @@
             android:textColor="@color/muted"
             android:textSize="12.5sp" />
 
-        <TextView
+        <ImageView
             android:id="@+id/btn_refresh"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_title_btn"
-            android:paddingHorizontal="12dp"
-            android:paddingVertical="5dp"
-            android:text="@string/refresh"
-            android:textColor="@color/muted"
-            android:textSize="12.5sp" />
+            android:contentDescription="@string/refresh"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_refresh"
+            app:tint="@color/muted" />
 
-        <TextView
+        <ImageView
             android:id="@+id/btn_settings"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_title_btn"
-            android:paddingHorizontal="12dp"
-            android:paddingVertical="5dp"
-            android:text="@string/settings"
-            android:textColor="@color/muted"
-            android:textSize="12.5sp" />
+            android:contentDescription="@string/settings"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_settings"
+            app:tint="@color/muted" />
     </LinearLayout>
 
     <EditText
@@ -85,17 +122,6 @@
         android:textColor="@color/fg"
         android:textColorHint="@color/muted"
         android:textSize="13.5sp" />
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rv_tags"
-        android:layout_width="match_parent"
-        android:layout_height="36dp"
-        android:clipToPadding="false"
-        android:overScrollMode="never"
-        android:paddingStart="16dp"
-        android:paddingTop="2dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="2dp" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_collections"

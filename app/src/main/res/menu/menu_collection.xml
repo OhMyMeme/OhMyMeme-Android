@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/act_new_subcollection"
+        android:title="@string/new_subcollection_title" />
+    <item
+        android:id="@+id/act_rename_collection"
+        android:title="@string/ctx_rename_collection" />
+    <item
+        android:id="@+id/act_delete_collection"
+        android:title="@string/ctx_delete_collection" />
+    <item
+        android:id="@+id/act_clear_recent"
+        android:title="@string/ctx_clear_recent" />
+</menu>

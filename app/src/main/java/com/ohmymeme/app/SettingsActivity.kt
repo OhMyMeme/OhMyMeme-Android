@@ -16,10 +16,16 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.File
 
 class SettingsActivity : AppCompatActivity() {
+
+    private val TAG = "OhMyMeme/SettingsActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +37,8 @@ class SettingsActivity : AppCompatActivity() {
         setupVersion()
         loadConfig()
         setupButtons()
+        setupExportLogs()
+        setupStorage()
     }
 
     private fun setupTitle() {
@@ -184,10 +192,130 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_check_sync_status).setOnClickListener { runSync(R.string.sync_checking) { CloudSync.checkSyncStatus(this) } }
         findViewById<TextView>(R.id.btn_sync_push).setOnClickListener { runSync(R.string.sync_pushing) { CloudSync.push(this) } }
         findViewById<TextView>(R.id.btn_sync_pull).setOnClickListener { runSync(R.string.sync_pulling) { CloudSync.pull(this) } }
+        findViewById<TextView>(R.id.btn_sync_orphans).setOnClickListener { confirmCleanupOrphans() }
         findViewById<TextView>(R.id.btn_danger_local).setOnClickListener { confirmDeleteLocal() }
         findViewById<TextView>(R.id.btn_danger_cloud).setOnClickListener { confirmDeleteCloud() }
-        findViewById<TextView>(R.id.btn_export_logs).setOnClickListener { toast(getString(R.string.developing)) }
         findViewById<TextView>(R.id.btn_check_update).setOnClickListener { checkUpdate() }
+    }
+
+    private val exportLogsLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            if (uri != null) writeLogsTo(uri)
+        }
+
+    private val storageDirLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                result.data?.data?.let { onStorageDirPicked(it) }
+            }
+        }
+
+    private fun setupStorage() {
+        findViewById<TextView>(R.id.tv_storage_path).text =
+            getString(R.string.storage_current, StoragePaths.dataDir(this).absolutePath)
+        findViewById<TextView>(R.id.btn_change_storage).setOnClickListener {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            storageDirLauncher.launch(intent)
+        }
+    }
+
+    private fun onStorageDirPicked(uri: Uri) {
+        val newDir = StoragePaths.resolveTreeUriPath(this, uri)
+        if (newDir == null) {
+            toast(getString(R.string.storage_pick_failed))
+            return
+        }
+        val oldDir = StoragePaths.dataDir(this)
+        if (oldDir.absolutePath == newDir.absolutePath) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.storage_transfer_title))
+            .setMessage(getString(R.string.storage_transfer_message))
+            .setPositiveButton(getString(R.string.storage_transfer)) { _, _ ->
+                moveLocalData(oldDir, newDir)
+            }
+            .setNegativeButton(getString(R.string.storage_no_transfer)) { _, _ ->
+                applyNewStorageDir(newDir)
+            }
+            .show()
+    }
+
+    private fun moveLocalData(oldDir: File, newDir: File) {
+        Thread {
+            try {
+                MemeDb.close()
+                newDir.mkdirs()
+                oldDir.listFiles()?.forEach { child ->
+                    val target = File(newDir, child.name)
+                    if (child.isDirectory) {
+                        copyRecursive(child, target)
+                    } else {
+                        child.copyTo(target, overwrite = true)
+                    }
+                }
+                runOnUiThread {
+                    applyNewStorageDir(newDir)
+                    toast(getString(R.string.storage_moved))
+                }
+            } catch (e: Exception) {
+                runOnUiThread { toast(getString(R.string.storage_move_failed)) }
+            }
+        }.start()
+    }
+
+    private fun copyRecursive(src: File, dst: File) {
+        if (src.isDirectory) {
+            dst.mkdirs()
+            src.listFiles()?.forEach { child -> copyRecursive(child, File(dst, child.name)) }
+        } else {
+            dst.parentFile?.mkdirs()
+            src.copyTo(dst, overwrite = true)
+        }
+    }
+
+    private fun applyNewStorageDir(dir: File) {
+        StoragePaths.setDataDir(this, dir)
+        ConfigStore.invalidate()
+    }
+
+    private fun setupExportLogs() {
+        findViewById<TextView>(R.id.btn_export_logs).setOnClickListener {
+            exportLogsLauncher.launch("OhMyMeme-logs.txt")
+        }
+    }
+
+    private fun writeLogsTo(uri: Uri) {
+        Thread {
+            try {
+                val sb = StringBuilder()
+                val pid = android.os.Process.myPid()
+                val proc = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "--pid=$pid", "*:D"))
+                BufferedReader(InputStreamReader(proc.inputStream)).useLines { lines ->
+                    lines.forEach { sb.append(it).append('\n') }
+                }
+                val err = BufferedReader(InputStreamReader(proc.errorStream)).useLines { lines ->
+                    lines.joinToString("\n")
+                }
+                proc.waitFor()
+                val header = StringBuilder()
+                header.append("OhMyMeme log export ").append(currentVersionName())
+                    .append(" pid=").append(pid).append('\n')
+                header.append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date())).append('\n')
+                header.append("--- logcat ---\n")
+                header.append(sb)
+                if (err.isNotBlank()) {
+                    header.append("--- logcat error ---\n").append(err).append('\n')
+                }
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(header.toString().toByteArray(Charsets.UTF_8))
+                } ?: run {
+                    runOnUiThread { toast(getString(R.string.log_export_failed)) }
+                    return@Thread
+                }
+                runOnUiThread { toast(getString(R.string.log_export_done)) }
+            } catch (e: Exception) {
+                runOnUiThread { toast(getString(R.string.log_export_failed)) }
+            }
+        }.start()
     }
 
     private fun runSync(progressRes: Int, block: () -> Any) {
@@ -254,6 +382,20 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(getString(R.string.update_later), null)
+            .show()
+    }
+
+    private fun confirmCleanupOrphans() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.btn_sync_orphans)
+            .setMessage(R.string.orphan_cleanup_confirm)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                runSync(R.string.sync_testing) {
+                    val (ok, msg) = CloudSync.cleanupRemoteOrphans(this, delete = true)
+                    if (ok) msg else "清理失败：$msg"
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
@@ -337,6 +479,7 @@ class SettingsActivity : AppCompatActivity() {
 
         ConfigStore.save(this)
         ConfigStore.reload(this)
+        android.util.Log.d(TAG, "saveConfig done")
         toast(getString(R.string.config_saved))
     }
 

@@ -6,25 +6,19 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-enum class ChipStyle {
-    TAG,
-    COLLECTION
-}
-
 class ChipAdapter<T>(
-    private val style: ChipStyle,
     private val items: List<T>,
     private val activeItems: Set<T>,
     private val label: (T) -> String
 ) : RecyclerView.Adapter<ChipAdapter.ChipViewHolder>() {
 
     var onItemClick: ((T) -> Unit)? = null
+    var onItemLongClick: ((View, T) -> Unit)? = null
 
     class ChipViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ChipViewHolder {
-        val layout = if (style == ChipStyle.TAG) R.layout.item_tag else R.layout.item_collection
-        val itemView = LayoutInflater.from(parent.context).inflate(layout, parent, false)
+        val itemView = LayoutInflater.from(parent.context).inflate(R.layout.item_collection, parent, false)
         return ChipViewHolder(itemView)
     }
 
@@ -32,20 +26,17 @@ class ChipAdapter<T>(
         val item = items[position]
         val text = label(item)
         val active = activeItems.contains(item)
-        val chip = holder.itemView.findViewById<TextView>(
-            if (style == ChipStyle.TAG) R.id.tv_chip else R.id.tv_collection_chip
-        )
+        val chip = holder.itemView.findViewById<TextView>(R.id.tv_collection_chip)
         chip.text = text
         chip.setTextColor(holder.itemView.context.getColor(if (active) R.color.accent else R.color.muted))
         chip.setBackgroundResource(
-            when {
-                active && style == ChipStyle.TAG -> R.drawable.bg_chip_active
-                active && style == ChipStyle.COLLECTION -> R.drawable.bg_collection_chip_active
-                style == ChipStyle.TAG -> R.drawable.bg_chip
-                else -> R.drawable.bg_collection_chip
-            }
+            if (active) R.drawable.bg_collection_chip_active else R.drawable.bg_collection_chip
         )
         holder.itemView.setOnClickListener { onItemClick?.invoke(item) }
+        holder.itemView.setOnLongClickListener {
+            onItemLongClick?.invoke(holder.itemView, item)
+            true
+        }
     }
 
     override fun getItemCount() = items.size

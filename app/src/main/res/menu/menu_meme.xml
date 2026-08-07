@@ -10,6 +10,9 @@
         android:id="@+id/act_add_collection"
         android:title="@string/ctx_add_collection" />
     <item
+        android:id="@+id/act_add_subgroup"
+        android:title="@string/ctx_add_subgroup" />
+    <item
         android:id="@+id/act_remove_collection"
         android:title="@string/ctx_remove_collection" />
     <item
