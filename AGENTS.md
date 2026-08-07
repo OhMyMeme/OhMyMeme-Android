@@ -50,6 +50,7 @@ app/src/main/
     AndroidGifDecoder.kt# 设备端 WebP→RGBA（反预乘 alpha）
     Thumbnailer.kt      # 缩略图生成 {id}_{size}.png
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
+    LanClient.kt        # 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话）
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
   res/
     layout/activity_main.xml / activity_settings.xml / item_*
@@ -174,6 +175,19 @@ Android/data/com.ohmymeme.app/
 - 「删除本地所有」复用 `MemeDb.deleteAll` + 清理 cache/缩略图；「删除云端所有」遍历远端清单删除文件+清单
 - 网格间距：`item_meme.xml` 卡片 `layout_margin 5dp`（对应桌面端网格 `gap: 10px`）
 
+### 局域网互联（LanClient.kt）
+- **角色**：安卓端仅客户端，连接桌面端 `lan.py` 服务（UDP 发现 + TCP 握手 + AES-GCM 会话），协议逐字节对齐
+- **UDP 发现**：`discover(context, port)` 广播 `{"t":"discover"}` 到 255.255.255.255:port，收集 1.5s 内 `{"t":"hello","name","os","ver","need_secret"}` 应答去重返回 `LanPeer` 列表
+- **TCP 握手**（对齐 `lan.py._handshake`）：有密钥时收 `challenge{nonce}` → 回 `proof{mac=HMAC-SHA256(secret,nonce)}` → `ok/no`（3 次）；无密钥直接收 `ok`，会话密钥 32 个零字节
+- **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
+- **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
+- **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`
+- **pull**：`pullManifest` → 遍历 `memes[]` 按 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部哈希去重 + 魔数识别 + 隐写解码）→ `CloudSync.applyRemoteOrder` 回写本地排序；文件名校验用 `CloudSync.isSafeRemoteFname`
+- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组
+- **配置同步**：`pullConfig`/`pushConfig` 走 `get_config`/`send_config`，两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
+- **UI**：设置页「局域网互联」区块（端口/密钥/扫描/连接/断开/拉取/上传/同步配置），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
+- **配置键**：`lan_port`（默认 17852）/`lan_secret`（`SECRET_KEYS` 加密存储，对齐桌面端 `_SECRET_KEYS`）
+
 ## 构建 & 验证
 ```bash
 ./gradlew :app:compileDebugKotlin   # 快速编译验证（约 12-19s）
@@ -212,6 +226,7 @@ Android/data/com.ohmymeme.app/
 - 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
+- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对/拉取/上传/配置同步
 
 ### 未实现（后续待做）
 - 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）

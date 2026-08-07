@@ -1,3 +1,22 @@
+# v0.4.0 — 局域网互联
+
+## 新增
+
+- **局域网互联（客户端）** — 连接电脑端 `lan.py` 服务，协议逐字节对齐：UDP 广播发现电脑（`{"t":"discover"}` → `{"t":"hello","name","os","ver","need_secret"}`），TCP 握手（有密钥走 `challenge`/`proof` HMAC-SHA256 挑战应答，无密钥直接 `ok`），会话密钥 `PBKDF2-HMAC-SHA256`（100000 迭代），帧格式 `[4B 长度][12B IV][AES-GCM 密文+16B tag]`
+- **设置页「局域网互联」区块** — 端口/密钥输入、扫描电脑（列出局域网内发现的主机，标注是否需密钥）、连接/断开、状态显示已连接电脑；连接生命周期跟随设置页（`onDestroy` 自动断开）
+- **拉取表情（电脑 → 手机）** — `pull_manifest` 拿远端清单 → `getByFilename` 去重 → `pull_file` 逐文件（base64）→ `MemeImporter.importBytes` 入库（哈希去重 + 魔数识别 + 隐写解码）→ `applyRemoteOrder` 回写本地排序
+- **上传表情（手机 → 电脑）** — 本地 `getAll` 逐个 `push_file`（电脑端 `_import_bytes` 哈希去重幂等）→ `push_manifest` 同步顺序/分组
+- **配置同步** — `get_config`/`send_config` 双向，两端均剔除 `SECRET_KEYS` 密钥字段（对齐桌面端 `allow_secret_config` 默认关）
+- **配置键** — `lan_port`（默认 17852）/`lan_secret`（进入 `SECRET_KEYS` 加密存储，对齐桌面端 `_SECRET_KEYS`）
+
+## 变更
+
+- **版本号** — versionCode 4 / versionName 0.4.0
+
+## 修复
+
+- 无（功能新增）
+
 # v0.3.0 — 点击分享 / 接收分享导入 / 同步顺序修复
 
 ## 新增

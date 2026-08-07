@@ -93,7 +93,7 @@ object CloudSync {
 
     // ─── 清单（对齐 manifest.py build/load） ───
 
-    private fun buildManifest(ctx: Context): JSONObject {
+    internal fun buildManifest(ctx: Context): JSONObject {
         val db = MemeDb.get(ctx)
         val memes = JSONArray()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
@@ -1296,7 +1296,7 @@ object CloudSync {
         }
     }
 
-    private fun applyRemoteOrder(ctx: Context, data: JSONObject) {
+    internal fun applyRemoteOrder(ctx: Context, data: JSONObject) {
         val db = MemeDb.get(ctx)
         val orderedIds = mutableListOf<Long>()
         val arr = data.optJSONArray("memes")
@@ -1312,7 +1312,7 @@ object CloudSync {
         if (orderedIds.isNotEmpty()) db.reorderMemes(orderedIds)
     }
 
-    private fun isSafeRemoteFname(name: String): Boolean {
+    internal fun isSafeRemoteFname(name: String): Boolean {
         return name.isNotEmpty() &&
             name != "." && name != ".." &&
             !name.startsWith(".") && !name.startsWith("/") &&
