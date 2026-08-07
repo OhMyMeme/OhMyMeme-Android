@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
@@ -82,6 +83,27 @@ class MainActivity : AppCompatActivity() {
         setupSearch()
         ensureFirstRunSetup()
         autoSyncIfConfigured()
+        handleIncomingIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun handleIncomingIntent(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
+        val uris = mutableListOf<Uri>()
+        when (intent.action) {
+            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            }
+        }
+        if (uris.isEmpty()) return
+        doImport(uris)
     }
 
     private fun autoSyncIfConfigured() {
@@ -575,7 +597,7 @@ class MainActivity : AppCompatActivity() {
                     val sortable = sortEnabled && currentKeyword.isEmpty() &&
                         (activeCollectionId == null || activeCollectionId!! > 0)
                     val adapter = MemeGridAdapter(this, memes).apply {
-                        onItemClick = { _, meme -> recordUse(meme) }
+                        onItemClick = { _, meme -> onMemeClick(meme) }
                         onLongClick = if (sortable) null
                         else { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
@@ -704,6 +726,38 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(getString(R.string.cancel), null)
             .show()
+    }
+
+    private fun onMemeClick(meme: Meme) {
+        recordUse(meme)
+        shareMeme(meme)
+    }
+
+    private fun shareMeme(meme: Meme) {
+        executor.execute {
+            val file = Thumbnailer.findMemeFile(this, meme.filename)
+            if (file == null) {
+                runOnUiThread { toast(getString(R.string.share_file_missing)) }
+                return@execute
+            }
+            val cache = cacheDir
+            val shareFile = File(cache, "share_${meme.id}_${file.name}")
+            try {
+                file.copyTo(shareFile, overwrite = true)
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
+                runOnUiThread {
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = meme.mimeType.ifEmpty { "image/*" }
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(share, getString(R.string.share_title)))
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "share failed for ${meme.filename}: $e")
+                runOnUiThread { toast(getString(R.string.share_failed)) }
+            }
+        }
     }
 
     private fun recordUse(meme: Meme) {

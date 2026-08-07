@@ -1113,12 +1113,14 @@ object CloudSync {
                 val f = File(cacheDir, fname)
                 if (f.exists() && f.delete()) removed++
             }
+            applyRemoteOrder(ctx, data)
             return SyncResult(
                 downloaded = downloaded, skipped = skipped, errors = errors,
                 removedLocal = removed, failed = failed
             )
         }
         applyRemoteCollections(ctx, data)
+        applyRemoteOrder(ctx, data)
         if (errors > 0) {
             throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
         }
@@ -1292,6 +1294,31 @@ object CloudSync {
                 }
             }
         }
+    }
+
+    private fun applyRemoteOrder(ctx: Context, data: JSONObject) {
+        val db = MemeDb.get(ctx)
+        val orderedIds = mutableListOf<Long>()
+        val arr = data.optJSONArray("memes")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                val fname = m.optString("filename", "")
+                if (!isSafeRemoteFname(fname)) continue
+                val row = db.getByFilename(fname)
+                if (row != null) orderedIds.add(row.id)
+            }
+        }
+        if (orderedIds.isNotEmpty()) db.reorderMemes(orderedIds)
+    }
+
+    private fun isSafeRemoteFname(name: String): Boolean {
+        return name.isNotEmpty() &&
+            name != "." && name != ".." &&
+            !name.startsWith(".") && !name.startsWith("/") &&
+            !name.startsWith("\\") && !name.startsWith("~") &&
+            !name.startsWith("..") &&
+            "/" !in name && "\\" !in name
     }
 
     private fun readDimensions(file: File): Pair<Int, Int> {
