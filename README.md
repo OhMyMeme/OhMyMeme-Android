@@ -5,12 +5,14 @@
 ## 功能
 
 - **暗色 UI 复刻** — 主界面 / 设置页严格对照桌面端（暗色主题、标题栏、搜索框、分组胶囊、3 列表情网格）
-- **表情导入** — 通过系统文件选择器批量导入图片（png/jpg/jpeg/gif/webp/bmp），SHA-256 哈希去重，自动重命名为 `{hash前16位}{真实扩展名}`
+- **表情导入** — 点击「导入」弹出菜单：从文件导入（系统文件选择器批量导入 png/jpg/jpeg/gif/webp/bmp）/ 从手机相册导入（Photo Picker，免权限，不支持时回退系统相册选择器）/ 从手机QQ缓存导入（占位，后续用 Shizuku 实现）；SHA-256 哈希去重，自动重命名为 `{hash前16位}{真实扩展名}`
 - **缓存扫描** — 启动/手动刷新时扫描缓存目录，已有文件自动注册到数据库（文件名 + 哈希双重去重）
 - **缩略图** — 懒生成缩略图到 `thumbnails/{meme_id}_{size}.png`，网格加载
 - **本地数据库** — SQLite (WAL)，7 表 schema 与桌面端 `src/database.py` 完全一致（memes/tags/meme_tags/collections/meme_collections/favorites/recent_uses）
 - **搜索** — 关键词实时筛选（按文件名/原始名），分组/收藏夹/最近使用胶囊过滤（分组带数量，有子分组时追加 `▼`），与桌面端 `search_memes` 一致
 - **小分组** — 顶栏分组胶囊长按新建小分组（仅 1 层，对齐桌面端 `create_subcollection`），子分组胶囊在父分组激活时平铺展开（对齐桌面端 webui 顶栏 `renderCollections`）；表情长按「加入小分组」可选目标子分组或新建，对齐桌面端网格右键
+- **分组管理** — 长按顶栏分组胶囊弹菜单：新建小分组 / 重命名分组 / 删除分组（成员移回上层，对齐桌面端 `rename_collection`/`delete_collection`），最近使用分组长按可清空最近使用（对齐桌面端 `clear_recent`）
+- **拖拽排序** — 标题栏「排序」开关进入排序模式，长按表情拖拽换位；全局视图落库 `reorderMemes`，分组视图内落库 `reorderCollectionMembers`，搜索中/收藏夹/最近使用禁用（对齐桌面端 `toggleDragSort`/`canReorderMemes`）
 - **设置** — 动图开关、复制处理模式、云端同步（FTP/S3/R2/WebDAV）凭据、版本信息、危险操作；保存/恢复默认已接真实配置（密钥字段用 Android Keystore 加密存储）
 - **配置加密** — `config.json` 中的密钥字段（s3_secret_key 等）经 Android Keystore AES-GCM 加密后落盘
 - **版本更新检查** — 设置页「检查更新」查询 GitHub Releases（`OhMyMeme/OhMyMeme-Android`），发现新版本弹窗引导下载 APK；下载地址按桌面端镜像列表依次探测可用镜像（github.dpik.top / gh.dpik.top / gh-proxy.org / proxy.starsfire.top），失败回退 GitHub 直连
@@ -150,6 +152,7 @@ com.ohmymeme.app/
 - [x] 设置页 UI 复刻
 - [x] 存储层（路径/数据库/配置）
 - [x] 缓存扫描 + 导入 + 缩略图
+- [x] 导入菜单：从文件导入 / 从手机相册导入（Photo Picker 免权限，不支持时回退相册）/ 从手机QQ缓存导入（占位）
 - [x] 设置保存/重置接真实配置
 - [x] 版本更新检查
 - [x] GIF 动图播放（含 WebP 动图，`auto_play_gif` 开关）
@@ -162,8 +165,9 @@ com.ohmymeme.app/
 - [x] 修改存储位置（localdata，可转移现有文件）
 - [x] 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，与桌面端 gif_stego.py 逐字节一致）
 - [x] 小分组（子分组）创建与嵌套胶囊展示（1 层限制，对齐桌面端 create_subcollection / renderCollections）
+- [x] 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
+- [x] 拖拽排序：标题栏「排序」开关 + 长按拖拽换位，全局 reorderMemes / 分组内 reorderCollectionMembers 落库
 - [ ] 点击复制到剪贴板
-- [ ] 分组管理交互
 
 ## 许可证
 

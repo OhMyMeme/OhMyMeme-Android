@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/act_import_files"
+        android:title="@string/import_menu_files" />
+    <item
+        android:id="@+id/act_import_album"
+        android:title="@string/import_menu_album" />
+    <item
+        android:id="@+id/act_import_qq"
+        android:title="@string/import_menu_qq" />
+</menu>

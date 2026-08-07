@@ -89,7 +89,8 @@ Android/data/com.ohmymeme.app/
 - 选完位置后 `markSetupDone` + `ConfigStore.invalidate` 再加载数据
 
 ### 导入（MemeImporter.kt）
-- SAF `ACTION_OPEN_DOCUMENT` 多选 → 逐文件：查哈希去重 → 魔数识别扩展名 → 拷贝到 `cache/{hash16}{ext}` → 读尺寸 → `addMeme`
+- 点击标题栏「导入」弹 `menu_import.xml` 菜单：从文件导入（`pickImages`，SAF `ACTION_OPEN_DOCUMENT` 多选）/ 从手机相册导入（`pickAlbumImages`：`isPhotoPickerAvailable` 为真走 Photo Picker `PickMultipleVisualMedia`，否则回退 `ACTION_GET_CONTENT` 相册，避免库默认回退文件选择器）/ 从手机QQ缓存导入（占位 Toast「开发中，后续用 Shizuku 获取文件」）
+- 两种导入共用 `doImport(uris)` → `MemeImporter.importUris`：逐文件：查哈希去重 → 魔数识别扩展名 → 拷贝到 `cache/{hash16}{ext}` → 读尺寸 → `addMeme`
 - 单文件失败不影响其余文件（catch 后继续）
 - **隐写 GIF 解码**（对应桌面端 `_try_decode_stego` + `gif_stego.py`）：GIF 且含 `STG3` 时 `GifStego.decode` 还原原图（7 种模式），只导入还原结果 `fromStego=1`，GIF 本身不入库；WebP 模式经 `AndroidGifDecoder.webpToRgba` 解码（反预乘 alpha）
 - `GifFrameDecoder` 为自研最小 GIF 解码器（GIF87a/89a、全局/局部色板、LZW、interlace、透明索引直映射 RGB、Pillow 一致的 `(R*299+G*587+B*114+500)/1000` 灰度），与 Pillow 逐字节一致；LZMA 用 `org.tukaani:xz`（`XZInputStream`）；PNG 输出用自研 RGBA 编码器
@@ -122,18 +123,28 @@ Android/data/com.ohmymeme.app/
 - 点击 `rv_collections` 胶囊过滤表情：分组单选切换（`activeCollectionId`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
 - 分组栏含系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`），与桌面端 `get_collections` 一致
-- 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`
+- 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致
 
 ### 小分组（子分组）
 - 对齐桌面端 `create_subcollection` + webui 顶栏：**仅 1 层**——`getCollectionDepth(parentId) >= 1` 时拒绝创建并提示「最多支持1层小分组」
 - 顶栏分组胶囊按 `MemeDb.getCollections()` 构建树（`buildTree`），仅当父分组激活或在激活路径（`computeActivePath` 向上追溯祖先）时 `flatten` 展开其子分组胶囊，与桌面端 `renderCollections` 的 `parentActive || activeCollection===c.id || activePath.has(c.id)` 逻辑一致
-- 长按顶栏分组胶囊 → `promptCreateSubcollection` 新建小分组（`createCollection(name, parentId)`）；对系统分组（id<=0）长按无反应
+- 长按顶栏分组胶囊 → `showCollectionMenu` 弹 PopupMenu（`menu_collection.xml`）：普通分组（id>0）含「新建小分组 / 重命名分组 / 删除分组」；最近使用（id=-3）含「清空最近使用」；系统分组（id=-2）与 id<=0 长按无反应
+  - 重命名走 `promptRenameCollection` → `MemeDb.renameCollection`
+  - 删除走 `promptDeleteCollection`：先查父分组，`search(collectionId)` 取成员逐一 `addToCollection(parentId)` 移回上层（顶层分组成员直接脱离分组），再 `deleteCollection`；当前视图是该分组时切回父分组（无父则 null）
+  - 清空最近使用走 `promptClearRecent` → `MemeDb.clearRecent`，若在最近使用视图则退出该视图
 - 表情长按菜单「加入小分组」→ `promptAddToSubgroup`：列出当前分组子分组 + 「新建小分组」，选中即 `addToCollection`；新建时走 `promptCreateSubcollectionFor`（同样受 1 层限制），对齐桌面端网格右键 `add-to-subgroup`
 
 ### 从分组移除 / 空分组自动删除（MainActivity.kt）
 - 长按菜单「从分组移除」仅在查看具体分组（`activeCollectionId > 0`）时显示；从最近使用视图查看时显示「从最近使用中删除」
 - 移除逻辑对齐桌面端 webui：若是小分组（`parentId != 0`）移回上层分组；移除后该分组计数为 0 则自动 `deleteCollection`，并把当前视图切回上层（无上层则 null）
 - 取消收藏/移出最近使用后，若对应系统分组（收藏夹/最近使用）计数归零，自动退出该视图
+
+### 拖拽排序（MainActivity.kt）
+- 标题栏「排序」按钮（`btn_sort`）开关 `sortEnabled`，开启后高亮 accent 色并 Toast 提示
+- 对齐桌面端 `toggleDragSort`/`canReorderMemes`：仅当 `sortEnabled && 关键词为空 && (activeCollectionId == null || > 0)` 时可排序（搜索中/收藏夹/最近使用禁用）
+- 可排序时用 `ItemTouchHelper`（`SortCallback`，`isLongPressDragEnabled`）支持长按拖拽换位，此时禁 `onLongClick` 右键菜单（手势冲突）；否则恢复右键菜单
+- `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
+- `MemeGridAdapter` 持有可变 `items`，`move(from,to)` 用 `notifyItemMoved`，`currentIds()` 供落库取序
 
 ### 版本更新（UpdateChecker.kt）
 - 桌面端 `updater.py` 迁移：`_parse_version` → `parseVersion`，`_pick_asset_url` → 遍历 assets 找 `.apk`
@@ -197,7 +208,9 @@ Android/data/com.ohmymeme.app/
 - 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新 localdata 目录，弹窗询问是否转移现有文件（数据库/缓存/缩略图），config.json 保持不变
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
+- 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
+- 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 
 ### 未实现（后续待做）
 - 点击复制到剪贴板（桌面端 clipboard_util 移植）
-- 分组管理交互（增删改，小分组已支持，完整分组管理未做）
+- 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）

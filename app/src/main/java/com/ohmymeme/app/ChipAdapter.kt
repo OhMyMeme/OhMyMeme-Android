@@ -13,7 +13,7 @@ class ChipAdapter<T>(
 ) : RecyclerView.Adapter<ChipAdapter.ChipViewHolder>() {
 
     var onItemClick: ((T) -> Unit)? = null
-    var onItemLongClick: ((T) -> Unit)? = null
+    var onItemLongClick: ((View, T) -> Unit)? = null
 
     class ChipViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 
@@ -34,7 +34,7 @@ class ChipAdapter<T>(
         )
         holder.itemView.setOnClickListener { onItemClick?.invoke(item) }
         holder.itemView.setOnLongClickListener {
-            onItemLongClick?.invoke(item)
+            onItemLongClick?.invoke(holder.itemView, item)
             true
         }
     }

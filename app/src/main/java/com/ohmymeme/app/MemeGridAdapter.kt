@@ -17,13 +17,23 @@ import java.util.concurrent.Executors
 
 class MemeGridAdapter(
     private val context: Context,
-    private val items: List<Meme>
+    items: List<Meme>
 ) : RecyclerView.Adapter<MemeGridAdapter.MemeViewHolder>() {
 
+    private val items: MutableList<Meme> = items.toMutableList()
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     var onItemClick: ((View, Meme) -> Unit)? = null
     var onLongClick: ((View, Meme) -> Unit)? = null
+
+    fun move(from: Int, to: Int) {
+        if (from == to) return
+        val item = items.removeAt(from)
+        items.add(to, item)
+        notifyItemMoved(from, to)
+    }
+
+    fun currentIds(): List<Long> = items.map { it.id }
 
     class MemeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 

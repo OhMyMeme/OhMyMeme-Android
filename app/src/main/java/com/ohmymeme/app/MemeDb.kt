@@ -328,6 +328,10 @@ class MemeDb(context: Context) {
         db.delete("collections", "id=?", arrayOf(collectionId.toString()))
     }
 
+    fun renameCollection(collectionId: Long, newName: String) {
+        db.execSQL("UPDATE collections SET name=? WHERE id=?", arrayOf(newName, collectionId))
+    }
+
     fun search(
         keyword: String = "",
         tags: List<String>? = null,
@@ -366,8 +370,18 @@ class MemeDb(context: Context) {
             where.add("m.id IN (SELECT meme_id FROM favorites)")
         }
 
+        val orderBy: String
+        if (collectionId != null) {
+            orderBy = "ORDER BY (" +
+                "SELECT mc.sort_order FROM meme_collections mc " +
+                "WHERE mc.meme_id = m.id AND mc.collection_id = ?" +
+                ") ASC, m.updated_at DESC"
+            params.add(collectionId.toString())
+        } else {
+            orderBy = "ORDER BY m.sort_order ASC, m.updated_at DESC"
+        }
         val sql = "SELECT m.* FROM memes m WHERE " + where.joinToString(" AND ") +
-            " ORDER BY m.sort_order ASC, m.updated_at DESC LIMIT ? OFFSET ?"
+            " $orderBy LIMIT ? OFFSET ?"
         params.add(limit.toString())
         params.add(offset.toString())
 
@@ -446,6 +460,10 @@ class MemeDb(context: Context) {
         db.delete("recent_uses", "meme_id=?", arrayOf(memeId.toString()))
     }
 
+    fun clearRecent() {
+        db.delete("recent_uses", null, null)
+    }
+
     fun deleteAll() {
         db.execSQL("DELETE FROM favorites")
         db.execSQL("DELETE FROM meme_collections")
@@ -461,6 +479,33 @@ class MemeDb(context: Context) {
         try {
             memeIds.forEachIndexed { i, mid ->
                 db.execSQL("UPDATE memes SET sort_order=? WHERE id=?", arrayOf(i, mid))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun reorderCollections(collectionIds: List<Long>) {
+        db.beginTransaction()
+        try {
+            collectionIds.forEachIndexed { i, cid ->
+                db.execSQL("UPDATE collections SET sort_order=? WHERE id=?", arrayOf(i, cid))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun reorderCollectionMembers(collectionId: Long, memeIds: List<Long>) {
+        db.beginTransaction()
+        try {
+            memeIds.forEachIndexed { i, mid ->
+                db.execSQL(
+                    "UPDATE meme_collections SET sort_order=? WHERE meme_id=? AND collection_id=?",
+                    arrayOf(i, mid, collectionId)
+                )
             }
             db.setTransactionSuccessful()
         } finally {
