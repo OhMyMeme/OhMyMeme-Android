@@ -179,13 +179,15 @@ Android/data/com.ohmymeme.app/
 - **角色**：安卓端仅客户端，连接桌面端 `lan.py` 服务（UDP 发现 + TCP 握手 + AES-GCM 会话），协议逐字节对齐
 - **UDP 发现**：`discover(context, port)` 广播 `{"t":"discover"}` 到 255.255.255.255:port，收集 1.5s 内 `{"t":"hello","name","os","ver","need_secret"}` 应答去重返回 `LanPeer` 列表
 - **TCP 握手**（对齐 `lan.py._handshake`）：有密钥时收 `challenge{nonce}` → 回 `proof{mac=HMAC-SHA256(secret,nonce)}` → `ok/no`（3 次）；无密钥直接收 `ok`，会话密钥 32 个零字节
+- **设备确认**（`connect` 内握手后）：客户端发 `device_info` 加密帧 `{cmd, name, model, os, ver}`（`Build.MODEL`/`MANUFACTURER`/`VERSION.RELEASE`/versionName），等待电脑端弹窗确认；`{ok:true, approved:true}` 才放行，`approved:false`/错误则 `LanError`，超时 `DEVICE_CONFIRM_TIMEOUT_MS`=60s；旧版电脑端回「未知命令」时提示升级；确认响应携带 `allow_secret_config` bool 存入 `LanConnection.allowSecretConfig`
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
-- **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`
-- **pull**：`pullManifest` → 遍历 `memes[]` 按 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部哈希去重 + 魔数识别 + 隐写解码）→ `CloudSync.applyRemoteOrder` 回写本地排序；文件名校验用 `CloudSync.isSafeRemoteFname`
+- **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
+- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤64MB `MAX_FILE_SIZE`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序；任一检查不过即跳过计入 failed 且不落盘
 - **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组
-- **配置同步**：`pullConfig`/`pushConfig` 走 `get_config`/`send_config`，两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
-- **UI**：设置页「局域网互联」区块（端口/密钥/扫描/连接/断开/拉取/上传/同步配置），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
+- **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
+- **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
+- **UI**：设置页「局域网互联」区块（端口/密钥/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
 - **配置键**：`lan_port`（默认 17852）/`lan_secret`（`SECRET_KEYS` 加密存储，对齐桌面端 `_SECRET_KEYS`）
 
 ## 构建 & 验证
@@ -226,7 +228,7 @@ Android/data/com.ohmymeme.app/
 - 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
-- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对/拉取/上传/配置同步
+- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）
 
 ### 未实现（后续待做）
 - 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）

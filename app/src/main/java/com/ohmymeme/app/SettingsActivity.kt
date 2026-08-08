@@ -301,21 +301,99 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_lan_push).setOnClickListener {
             lanOp(R.id.btn_lan_push, getString(R.string.btn_lan_push)) { LanClient.push(this, it) }
         }
-        findViewById<TextView>(R.id.btn_lan_config).setOnClickListener {
-            val conn = lanConnection
-            if (conn == null) {
-                toast(getString(R.string.lan_status_disconnected))
-                return@setOnClickListener
-            }
-            Thread {
-                try {
+        findViewById<TextView>(R.id.btn_lan_pull_config).setOnClickListener {
+            configOp(pull = true)
+        }
+        findViewById<TextView>(R.id.btn_lan_push_config).setOnClickListener {
+            configOp(pull = false)
+        }
+        findViewById<TextView>(R.id.btn_lan_pull_key).setOnClickListener {
+            keyOp(R.id.btn_lan_pull_key, pull = true)
+        }
+        findViewById<TextView>(R.id.btn_lan_push_key).setOnClickListener {
+            keyOp(R.id.btn_lan_push_key, pull = false)
+        }
+        updateKeyRow()
+    }
+
+    /** 密钥同步按钮可见性：仅在电脑端允许密钥传输（allow_secret_config=true）时显示 */
+    private fun updateKeyRow() {
+        val row = findViewById<android.view.View>(R.id.lan_key_row)
+        val conn = lanConnection
+        row.visibility = if (conn != null && conn.allowSecretConfig) {
+            android.view.View.VISIBLE
+        } else {
+            android.view.View.GONE
+        }
+    }
+
+    /** 配置同步：拉取（电脑→手机）或推送（手机→电脑）独立按钮，后台执行，弹 Toast 结果 */
+    private fun configOp(pull: Boolean) {
+        val conn = lanConnection
+        if (conn == null) {
+            toast(getString(R.string.lan_status_disconnected))
+            return
+        }
+        val btnId = if (pull) R.id.btn_lan_pull_config else R.id.btn_lan_push_config
+        val btn = findViewById<TextView>(btnId)
+        btn.isEnabled = false
+        Thread {
+            try {
+                if (pull) {
+                    LanClient.pullConfig(this, conn)
+                    runOnUiThread { toast(getString(R.string.lan_config_pulled)) }
+                } else {
                     LanClient.pushConfig(this, conn)
                     runOnUiThread { toast(getString(R.string.lan_config_pushed)) }
-                } catch (e: Exception) {
-                    runOnUiThread { toast(e.message ?: "同步配置失败") }
                 }
-            }.start()
+            } catch (e: Exception) {
+                runOnUiThread { toast(e.message ?: "同步配置失败") }
+            } finally {
+                runOnUiThread { btn.isEnabled = true }
+            }
+        }.start()
+    }
+
+    /** 密钥同步：先弹安全警告，确认后后台执行 */
+    private fun keyOp(btnId: Int, pull: Boolean) {
+        val conn = lanConnection
+        if (conn == null) {
+            toast(getString(R.string.lan_status_disconnected))
+            return
         }
+        if (!conn.allowSecretConfig) {
+            toast(getString(R.string.lan_status_disconnected))
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lan_key_title))
+            .setMessage(getString(R.string.lan_key_confirm))
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                runKeyOp(btnId, conn, pull)
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    /** 密钥同步后台执行，弹 Toast 结果 */
+    private fun runKeyOp(btnId: Int, conn: LanClient.LanConnection, pull: Boolean) {
+        val btn = findViewById<TextView>(btnId)
+        btn.isEnabled = false
+        Thread {
+            try {
+                if (pull) {
+                    LanClient.pullConfig(this, conn, includeSecrets = true)
+                    runOnUiThread { toast(getString(R.string.lan_key_pulled)) }
+                } else {
+                    LanClient.pushConfig(this, conn, includeSecrets = true)
+                    runOnUiThread { toast(getString(R.string.lan_key_pushed)) }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { toast(e.message ?: "同步密钥失败") }
+            } finally {
+                runOnUiThread { btn.isEnabled = true }
+            }
+        }.start()
     }
 
     private fun scanLan() {
@@ -352,6 +430,7 @@ class SettingsActivity : AppCompatActivity() {
             lanConnection = null
             findViewById<TextView>(R.id.tv_lan_status).text = getString(R.string.lan_status_disconnected)
             findViewById<TextView>(R.id.btn_lan_connect).text = getString(R.string.btn_lan_connect)
+            updateKeyRow()
             toast(getString(R.string.lan_status_disconnected))
             return
         }
@@ -376,7 +455,7 @@ class SettingsActivity : AppCompatActivity() {
         val secret = textOf(R.id.et_lan_secret)
         Thread {
             try {
-                val conn = LanClient.connect(peer.ip, peer.port, secret)
+                val conn = LanClient.connect(this, peer.ip, peer.port, secret)
                 lanConnection?.close()
                 lanConnection = conn
                 runOnUiThread {
@@ -384,6 +463,7 @@ class SettingsActivity : AppCompatActivity() {
                     btn.text = getString(R.string.btn_lan_disconnect)
                     findViewById<TextView>(R.id.tv_lan_status).text =
                         getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver)
+                    updateKeyRow()
                     toast(getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver))
                 }
             } catch (e: Exception) {
@@ -416,7 +496,7 @@ class SettingsActivity : AppCompatActivity() {
                 btn.text = when (btnId) {
                     R.id.btn_lan_pull -> getString(R.string.btn_lan_pull)
                     R.id.btn_lan_push -> getString(R.string.btn_lan_push)
-                    else -> getString(R.string.btn_lan_config)
+                    else -> getString(R.string.btn_lan_pull)
                 }
                 if (result.pulled > 0) {
                     toast(getString(R.string.lan_pull_done, result.pulled, result.skipped, result.errors))

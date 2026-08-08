@@ -55,11 +55,17 @@ object MemeImporter {
             fromStego = 0
         }
 
+        // 先校验内容为合法可解码图片（宽高 > 0），通过后才落盘，杜绝孤儿缓存文件
+        val dims = decodeBounds(payload)
+        if (dims.first <= 0 || dims.second <= 0) {
+            android.util.Log.w(TAG, "拒绝导入非图片内容（宽高 $dims, ext=$realExt）")
+            return false
+        }
+
         val fhash = FileUtils.sha256(java.io.ByteArrayInputStream(payload))
         if (db.getByHash(fhash) != null) return false
         val dst = File(cacheDir, "${fhash.substring(0, 16)}$realExt")
         dst.writeBytes(payload)
-        val dims = CacheScanner.decodeBounds(dst)
         val mime = "image/${realExt.substring(1)}"
         db.addMeme(
             filename = dst.name,
@@ -73,6 +79,25 @@ object MemeImporter {
         )
         android.util.Log.d(TAG, "imported ${dst.name}")
         return true
+    }
+
+    /** 用 BitmapFactory 只读宽高，不真正解码，判断是否为可解码图片 */
+    private fun decodeBounds(bytes: ByteArray): Pair<Int, Int> {
+        return try {
+            val opts = android.graphics.BitmapFactory.Options()
+            opts.inJustDecodeBounds = true
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            Pair(opts.outWidth, opts.outHeight)
+        } catch (e: Exception) {
+            Pair(0, 0)
+        }
+    }
+
+    /** LAN 拉取前的文件内容合法性检查：魔数可识别 + 可解码出有效尺寸 */
+    fun isValidImageContent(bytes: ByteArray): Boolean {
+        if (detectExt(bytes) == null) return false
+        val dims = decodeBounds(bytes)
+        return dims.first > 0 && dims.second > 0
     }
 
     private fun detectExt(bytes: ByteArray): String? {
