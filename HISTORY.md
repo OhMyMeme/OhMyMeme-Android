@@ -1,3 +1,13 @@
+# v0.4.3 — WebDAV 手写协议修复
+
+## 修复
+
+- **WebDAV 网络不可达（`ProtocolException: Expected one of [OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, PATCH]`）** — 根因是 Android `HttpURLConnection` 的方法白名单拒绝 WebDAV 的 `PROPFIND`/`MKCOL` 自定义方法（与连接池无关）；改为**原始 socket HTTP/1.1**（`davHttp`）手写协议层，与 FTP 后端同思路，任意方法直发、HTTPS 走 SSLSocket、每次独立建连 `Connection: close`，三种响应体读取（Content-Length/chunked/读到关闭），下载流式写盘不撑内存
+
+## 变更
+
+- **版本号** — versionCode 7 / versionName 0.4.3
+
 # v0.4.2 — 局域网密钥同步
 
 ## 新增
