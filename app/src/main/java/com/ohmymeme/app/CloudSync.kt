@@ -4,9 +4,13 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.HttpURLConnection
@@ -21,6 +25,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 
 /**
  * 云端同步：FTP / S3（兼容 R2 / MinIO）/ WebDAV。
@@ -607,7 +613,8 @@ object CloudSync {
         private var authHeader = ""
         private var timeout = 30
 
-        override fun connect() {
+        /** 简单 HTTP/1.1 响应：状态码 + 响应体字节 */
+        private class DavResponse(val code: Int, val body: ByteArray)        override fun connect() {
             val url = cfg.optString("webdav_url", "")
             if (url.isEmpty()) throw SyncError("WebDAV url not configured")
             val u = URL(url)
@@ -628,10 +635,8 @@ object CloudSync {
         override fun testConnection() {
             val url = davUrl(cfg.optString("webdav_path", ""))
             try {
-                val conn = request("PROPFIND", url, null, mapOf("Depth" to "0"))
-                val code = conn.responseCode
-                conn.disconnect()
-                if (code !in 200..299) throw SyncError("WebDAV PROPFIND returned HTTP $code")
+                val resp = davHttp("PROPFIND", url, null, mapOf("Depth" to "0"))
+                if (resp.code !in 200..299) throw SyncError("WebDAV PROPFIND returned HTTP ${resp.code}")
             } catch (e: SyncError) {
                 throw e
             } catch (e: IOException) {
@@ -661,31 +666,217 @@ object CloudSync {
             return if (enc.isEmpty()) baseUrl.trimEnd('/') else baseUrl.trimEnd('/') + "/" + enc
         }
 
-        private fun request(method: String, url: String, data: Any?, headers: Map<String, String> = emptyMap()): HttpURLConnection {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.requestMethod = method
-            conn.connectTimeout = timeout * 1000
-            conn.readTimeout = timeout * 1000
-            conn.setRequestProperty("User-Agent", "OhMyMeme-Android")
-            if (authHeader.isNotEmpty()) conn.setRequestProperty("Authorization", authHeader)
-            for ((k, v) in headers) conn.setRequestProperty(k, v)
-            if (data != null) {
-                conn.doOutput = true
-                if (data is ByteArray) conn.outputStream.write(data)
-                if (data is File) {
-                    conn.setFixedLengthStreamingMode(data.length())
-                    data.inputStream().use { ins ->
-                        val buf = ByteArray(65536)
-                        val out = conn.outputStream
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
+        /**
+         * 原始 socket HTTP/1.1 请求，支持任意方法（PROPFIND/MKCOL 等 HttpURLConnection 拒绝的方法）。
+         * 每次请求独立建连、Connection: close，不复用连接（规避 Android HttpURLConnection 方法白名单与
+         * chunked 连接池问题）。HTTPS 走 SSLSocket。
+         */
+        private fun davHttp(
+            method: String,
+            url: String,
+            data: Any?,
+            headers: Map<String, String> = emptyMap(),
+            sink: java.io.OutputStream? = null
+        ): DavResponse {
+            val u = URL(url)
+            val isTls = u.protocol == "https"
+            val host = u.host
+            val port = if (u.port > 0) u.port else if (isTls) 443 else 80
+            val path = u.path.ifEmpty { "/" } + (u.query?.let { "?$it" } ?: "")
+            val raw = Socket()
+            try {
+                raw.connect(InetSocketAddress(host, port), timeout * 1000)
+                raw.soTimeout = timeout * 1000
+                val sock: Socket = if (isTls) {
+                    val ssl = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                        .createSocket(raw, host, port, true) as SSLSocket
+                    ssl.startHandshake()
+                    ssl
+                } else {
+                    raw
+                }
+                return try {
+                    val out = BufferedOutputStream(sock.getOutputStream())
+                    val sb = StringBuilder()
+                    sb.append("$method $path HTTP/1.1\r\n")
+                    sb.append("Host: $host\r\n")
+                    sb.append("User-Agent: OhMyMeme-Android\r\n")
+                    sb.append("Connection: close\r\n")
+                    if (authHeader.isNotEmpty()) sb.append("Authorization: $authHeader\r\n")
+                    for ((k, v) in headers) sb.append("$k: $v\r\n")
+                    var payload: ByteArray? = null
+                    var payloadLen = -1L
+                    if (data is ByteArray) {
+                        payload = data
+                        payloadLen = data.size.toLong()
+                    } else if (data is File) {
+                        payloadLen = data.length()
+                    }
+                    if (payloadLen >= 0) sb.append("Content-Length: $payloadLen\r\n")
+                    sb.append("\r\n")
+                    out.write(sb.toString().toByteArray(Charsets.UTF_8))
+                    if (payload != null) {
+                        out.write(payload)
+                    } else if (data is File) {
+                        data.inputStream().use { ins ->
+                            val buf = ByteArray(65536)
+                            while (true) {
+                                val n = ins.read(buf)
+                                if (n <= 0) break
+                                out.write(buf, 0, n)
+                            }
                         }
                     }
+                    out.flush()
+
+                    val input = BufferedInputStream(sock.getInputStream())
+                    val statusLine = readHttpLine(input) ?: throw IOException("WebDAV 无响应")
+                    val parts = statusLine.split(" ")
+                    val code = parts.getOrNull(1)?.toIntOrNull()
+                        ?: throw IOException("WebDAV 状态行异常: $statusLine")
+                    val respHeaders = LinkedHashMap<String, String>()
+                    while (true) {
+                        val line = readHttpLine(input) ?: break
+                        if (line.isEmpty()) break
+                        val idx = line.indexOf(':')
+                        if (idx > 0) {
+                            respHeaders[line.substring(0, idx).trim().lowercase()] =
+                                line.substring(idx + 1).trim()
+                        }
+                    }
+                    val body = if (sink != null) {
+                        readHttpBodyToSink(input, respHeaders, method, sink)
+                        ByteArray(0)
+                    } else {
+                        readHttpBody(input, respHeaders, method)
+                    }
+                    DavResponse(code, body)
+                } finally {
+                    try {
+                        sock.close()
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            } finally {
+                try {
+                    raw.close()
+                } catch (e: Exception) {
+                    // ignore
                 }
             }
-            return conn
+        }
+
+        /** 读一行（\r\n 或 \n 结尾，不含换行） */
+        private fun readHttpLine(input: InputStream): String? {
+            val sb = StringBuilder()
+            var prev = -1
+            while (true) {
+                val c = input.read()
+                if (c < 0) {
+                    if (sb.isEmpty() && prev < 0) return null
+                    return sb.toString()
+                }
+                if (c == '\n'.code) {
+                    if (sb.isNotEmpty() && sb.last() == '\r') sb.setLength(sb.length - 1)
+                    return sb.toString()
+                }
+                sb.append(c.toChar())
+                prev = c
+            }
+        }
+
+        /** 按 Content-Length / chunked / 读到连接关闭 三种方式读取响应体 */
+        private fun readHttpBody(input: InputStream, headers: Map<String, String>, method: String): ByteArray {
+            if (method.equals("HEAD", ignoreCase = true)) return ByteArray(0)
+            val te = headers["transfer-encoding"]
+            if (te != null && te.contains("chunked", ignoreCase = true)) {
+                val body = ByteArrayOutputStream()
+                readChunked(input, body)
+                return body.toByteArray()
+            }
+            val cl = headers["content-length"]?.toLongOrNull()
+            if (cl != null && cl >= 0) {
+                val buf = ByteArray(cl.toInt())
+                readFully(input, buf, cl.toInt())
+                return buf
+            }
+            // 无长度信息：读到连接关闭
+            val body = ByteArrayOutputStream()
+            val buf = ByteArray(65536)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                body.write(buf, 0, n)
+            }
+            return body.toByteArray()
+        }
+
+        /** 分块读取响应体并写入 sink（用于流式下载到文件，避免大文件撑爆内存） */
+        private fun readHttpBodyToSink(input: InputStream, headers: Map<String, String>, method: String, sink: java.io.OutputStream) {
+            if (method.equals("HEAD", ignoreCase = true)) return
+            val te = headers["transfer-encoding"]
+            if (te != null && te.contains("chunked", ignoreCase = true)) {
+                readChunked(input, sink)
+                return
+            }
+            val cl = headers["content-length"]?.toLongOrNull()
+            if (cl != null && cl >= 0) {
+                var remaining = cl
+                val buf = ByteArray(65536)
+                while (remaining > 0) {
+                    val want = minOf(buf.size.toLong(), remaining).toInt()
+                    val n = input.read(buf, 0, want)
+                    if (n < 0) break
+                    sink.write(buf, 0, n)
+                    remaining -= n
+                }
+                return
+            }
+            // 无长度信息：读到连接关闭
+            val buf = ByteArray(65536)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                sink.write(buf, 0, n)
+            }
+        }
+
+        /** 解析 chunked 块并写入 out */
+        private fun readChunked(input: InputStream, out: java.io.OutputStream) {
+            while (true) {
+                val sizeLine = readHttpLine(input) ?: break
+                val size = sizeLine.trim().substringBefore(';').toIntOrNull(16) ?: break
+                if (size == 0) {
+                    // 读到 trailer 直到空行
+                    while (true) {
+                        val t = readHttpLine(input) ?: break
+                        if (t.isEmpty()) break
+                    }
+                    break
+                }
+                var remaining = size
+                val chunk = ByteArray(65536)
+                while (remaining > 0) {
+                    val want = minOf(chunk.size.toLong(), remaining.toLong()).toInt()
+                    val n = input.read(chunk, 0, want)
+                    if (n <= 0) break
+                    out.write(chunk, 0, n)
+                    remaining -= n
+                }
+                readHttpLine(input) // chunk 后的 CRLF
+            }
+        }
+
+        /** 尝试读满 buf 的 len 字节，返回实际读取字节数 */
+        private fun readFully(input: InputStream, buf: ByteArray, len: Int): Int {
+            var total = 0
+            while (total < len) {
+                val n = input.read(buf, total, len - total)
+                if (n < 0) break
+                total += n
+            }
+            return total
         }
 
         override fun ensureRemoteDir(path: String) {
@@ -693,12 +884,10 @@ object CloudSync {
             for (p in path.trim('/').split("/").filter { it.isNotEmpty() }) {
                 rel += "/" + p
                 try {
-                    val conn = request("MKCOL", davUrl(rel), null)
-                    val code = conn.responseCode
-                    conn.disconnect()
-                    if (code in 200..399) continue
+                    val resp = davHttp("MKCOL", davUrl(rel), null)
+                    if (resp.code in 200..399) continue
                     if (fileExists(rel)) continue
-                    throw SyncError("MKCOL $rel 失败: HTTP $code")
+                    throw SyncError("MKCOL $rel 失败: HTTP ${resp.code}")
                 } catch (e: SyncError) {
                     throw e
                 } catch (e: IOException) {
@@ -710,13 +899,11 @@ object CloudSync {
 
         override fun uploadFile(local: File, remotePath: String): Boolean {
             return try {
-                val conn = request(
+                val resp = davHttp(
                     "PUT", davUrl(remotePath), local,
                     mapOf("Content-Type" to "application/octet-stream")
                 )
-                val code = conn.responseCode
-                conn.disconnect()
-                code in 200..299
+                resp.code in 200..299
             } catch (e: Exception) {
                 false
             }
@@ -724,45 +911,40 @@ object CloudSync {
 
         override fun downloadFile(remotePath: String, dest: File): Boolean {
             return try {
-                val conn = request("GET", davUrl(remotePath), null)
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    conn.disconnect()
-                    return false
-                }
                 dest.parentFile?.mkdirs()
                 val tmp = File(dest.parentFile, dest.name + ".tmp")
-                conn.inputStream.use { ins ->
-                    tmp.outputStream().use { out ->
-                        val buf = ByteArray(65536)
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
-                        }
-                    }
+                var respCode = 0
+                tmp.outputStream().use { out ->
+                    val resp = davHttp("GET", davUrl(remotePath), null, sink = out)
+                    respCode = resp.code
                 }
-                conn.disconnect()
+                if (respCode !in 200..299) {
+                    tmp.delete()
+                    return false
+                }
                 if (dest.exists()) dest.delete()
                 tmp.renameTo(dest)
                 true
             } catch (e: Exception) {
+                try {
+                    if (dest.parentFile != null) {
+                        File(dest.parentFile, dest.name + ".tmp").delete()
+                    }
+                } catch (e2: Exception) {
+                    // ignore
+                }
                 false
             }
         }
 
         override fun fileExists(path: String): Boolean {
             return try {
-                val conn = request("PROPFIND", davUrl(path), null, mapOf("Depth" to "0"))
-                val code = conn.responseCode
-                conn.disconnect()
-                code in 200..299
+                val resp = davHttp("PROPFIND", davUrl(path), null, mapOf("Depth" to "0"))
+                resp.code in 200..299
             } catch (e: IOException) {
                 try {
-                    val conn = request("HEAD", davUrl(path), null)
-                    val code = conn.responseCode
-                    conn.disconnect()
-                    code in 200..299
+                    val resp = davHttp("HEAD", davUrl(path), null)
+                    resp.code in 200..299
                 } catch (e2: Exception) {
                     false
                 }
@@ -771,10 +953,8 @@ object CloudSync {
 
         override fun deleteFile(path: String): Boolean {
             return try {
-                val conn = request("DELETE", davUrl(path), null)
-                val code = conn.responseCode
-                conn.disconnect()
-                code == 404 || code in 200..299
+                val resp = davHttp("DELETE", davUrl(path), null)
+                resp.code == 404 || resp.code in 200..299
             } catch (e: Exception) {
                 false
             }
@@ -782,14 +962,9 @@ object CloudSync {
 
         override fun listFiles(path: String): List<String> {
             return try {
-                val conn = request("PROPFIND", davUrl(path), null, mapOf("Depth" to "1"))
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    conn.disconnect()
-                    return emptyList()
-                }
-                val raw = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
+                val resp = davHttp("PROPFIND", davUrl(path), null, mapOf("Depth" to "1"))
+                if (resp.code !in 200..299) return emptyList()
+                val raw = String(resp.body, Charsets.UTF_8)
                 val files = mutableListOf<String>()
                 val re = Regex("<D:href>(.*?)</D:href>|<d:href>(.*?)</d:href>")
                 for (m in re.findAll(raw)) {
