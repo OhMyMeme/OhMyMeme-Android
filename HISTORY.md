@@ -1,3 +1,27 @@
+# v0.4.2 — 局域网密钥同步
+
+## 新增
+
+- **密钥同步（随开关动态显示）** — 电脑端恢复「允许密钥传输」开关；手机连接时 `device_info` 确认响应携带 `allow_secret_config`，为 true 则设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row`），点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤 `SECRET_KEYS`，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；开关关闭或未连接时按钮隐藏
+
+## 变更
+
+- **配置同步恢复双向（电脑 ↔ 手机）** — 重新启用 `pushConfig`/`send_config`，同步配置拆为「拉取配置」「推送配置」两个独立按钮（不再弹窗二选一），两端均剔除 `SECRET_KEYS`；密钥同步仅经独立「拉取/推送密钥」入口
+- **版本号** — versionCode 6 / versionName 0.4.2
+
+# v0.4.1 — 局域网安全加固 / 配置单向同步
+
+## 变更
+
+- **拉取内容校验（防非表情包文件）** — LAN 拉取逐文件四重检查，任一不过即跳过并计入失败、不落盘：
+  - 文件名安全（`isSafeRemoteFname`，防路径穿越）
+  - 单文件大小上限 64MB（`MAX_FILE_SIZE`，清单 `file_size` 与实际字节双重校验）
+  - 哈希一致性（清单 `sha256` 存在时校验拉取字节，防篡改/错文件）
+  - 内容可解码（`MemeImporter.isValidImageContent`：魔数可识别 + `BitmapFactory inJustDecodeBounds` 宽高 > 0）
+- **先校验后落盘（杜绝孤儿文件）** — `importBytes` 改为先 `decodeBounds` 校验宽高 > 0，通过后才写缓存 + 入库；此前非图片字节会先写盘再在 mime 计算处抛异常留下孤儿缓存文件
+- **配置同步改为单向（电脑 → 手机）** — 移除 `pushConfig`/`send_config`（手机不再推送配置覆盖电脑），「同步配置」按钮改为「拉取配置」从电脑拉取，电脑为权威源，密钥字段依旧两端剔除
+- **版本号** — versionCode 5 / versionName 0.4.1
+
 # v0.4.0 — 局域网互联
 
 ## 新增

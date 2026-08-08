@@ -174,7 +174,7 @@
     <string name="btn_change_storage">修改存储位置</string>
 
     <string name="lan_section">局域网互联</string>
-    <string name="lan_note">连接同一局域网内的电脑端 OhMyMeme（电脑设置页开启「局域网互联」服务），双向同步表情与配置</string>
+    <string name="lan_note">连接同一局域网内的电脑端 OhMyMeme（电脑设置页开启「局域网互联」服务）。连接时发送本机设备信息，需电脑端确认后方可传输；表情与配置均可双向同步，密钥需电脑端开启「允许密钥传输」后方可同步</string>
     <string name="lan_port">端口</string>
     <string name="lan_secret">互联密钥</string>
     <string name="lan_secret_hint">留空表示信任局域网</string>
@@ -183,7 +183,14 @@
     <string name="btn_lan_disconnect">断开</string>
     <string name="btn_lan_pull">拉取表情</string>
     <string name="btn_lan_push">上传表情</string>
-    <string name="btn_lan_config">同步配置</string>
+    <string name="btn_lan_pull_config">拉取配置</string>
+    <string name="btn_lan_push_config">推送配置</string>
+    <string name="btn_lan_pull_key">拉取密钥</string>
+    <string name="btn_lan_push_key">推送密钥</string>
+    <string name="lan_key_title">同步密钥</string>
+    <string name="lan_key_confirm">请勿在公共网络或不信任的网络进行此操作！</string>
+    <string name="lan_key_pulled">已从电脑同步密钥</string>
+    <string name="lan_key_pushed">已推送密钥到电脑</string>
     <string name="lan_scanning">正在扫描局域网电脑...</string>
     <string name="lan_scan_none">未发现电脑，请确认电脑端已开启局域网服务</string>
     <string name="lan_scan_found">发现 %1$d 台电脑：</string>

@@ -1,6 +1,7 @@
 package com.ohmymeme.app
 
 import android.content.Context
+import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.DataInputStream
@@ -30,7 +31,9 @@ object LanClient {
     private const val TAG = "OhMyMeme/LanClient"
     private const val PROTOCOL_VERSION = 1
     private const val MAX_FRAME = 64 * 1024 * 1024
+    private const val MAX_FILE_SIZE = 64L * 1024 * 1024
     private const val HANDSHAKE_TIMEOUT_MS = 10_000
+    private const val DEVICE_CONFIRM_TIMEOUT_MS = 60_000
     private const val IDLE_TIMEOUT_MS = 60_000
     private const val IV_LEN = 12
     private const val TAG_LEN = 16
@@ -106,20 +109,37 @@ object LanClient {
         return result
     }
 
-    /** 建立加密会话并返回操作句柄 */
-    fun connect(ip: String, port: Int, secret: String): LanConnection {
+    /** 建立加密会话并返回操作句柄（发送本机设备描述，等待电脑端确认后可用） */
+    fun connect(context: Context, ip: String, port: Int, secret: String): LanConnection {
         val conn = LanConnection()
-        conn.connect(ip, port, secret)
+        conn.connect(ip, port, secret, buildDeviceInfo(context))
         return conn
+    }
+
+    /** 构建设备描述（供电脑端确认弹窗展示） */
+    private fun buildDeviceInfo(context: Context): JSONObject {
+        val ver = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        val model = Build.MODEL
+        val manufacturer = Build.MANUFACTURER
+        val name = if (manufacturer.isNotBlank() && manufacturer != "unknown") "$manufacturer $model" else model
+        return JSONObject()
+            .put("name", name)
+            .put("model", model)
+            .put("os", "Android ${Build.VERSION.RELEASE}")
+            .put("ver", ver)
     }
 
     /**
      * 从电脑拉取表情：pull_manifest → 去重 → pull_file 逐文件导入 → applyRemoteOrder。
-     * 阻塞，勿在主线程调用。
+     * 每个文件先过合法性检查（文件名安全 / 大小上限 / 哈希一致 / 内容可解码），
+     * 不合法跳过计入 failed 且不落盘。阻塞，勿在主线程调用。
      */
     fun pull(context: Context, conn: LanConnection): LanResult {
         val db = MemeDb.get(context)
-        val cacheDir = StoragePaths.cacheDir(context)
         val manifest = conn.pullManifest()
         val remoteArr = manifest.optJSONArray("memes") ?: JSONArray()
         var pulled = 0
@@ -141,6 +161,25 @@ object LanClient {
             }
             try {
                 val data = conn.pullFile(fname)
+                if (data.size.toLong() > MAX_FILE_SIZE) {
+                    errors++
+                    failed.add(fname)
+                    continue
+                }
+                // 哈希一致性：与清单 sha256 比对（清单字段存在时）
+                val remoteHash = m.optString("sha256", "")
+                if (remoteHash.isNotEmpty() &&
+                    !remoteHash.equals(FileUtils.sha256(java.io.ByteArrayInputStream(data)), ignoreCase = true)
+                ) {
+                    errors++
+                    failed.add(fname)
+                    continue
+                }
+                if (!MemeImporter.isValidImageContent(data)) {
+                    errors++
+                    failed.add(fname)
+                    continue
+                }
                 val oname = m.optString("name", "").ifEmpty { fname.substringBeforeLast('.') }
                 val imported = MemeImporter.importBytes(context, data, oname)
                 if (imported) pulled++ else skipped++
@@ -203,15 +242,20 @@ object LanClient {
         return LanResult(pushed = pushed, skipped = skipped, errors = errors, failed = failed)
     }
 
-    /** 从电脑同步配置到本地（远端默认剔除密钥字段） */
-    fun pullConfig(context: Context, conn: LanConnection) {
+    /**
+     * 从电脑同步配置到本地。
+     * 默认剔除密钥字段（电脑端未开 `allow_secret_config` 时也会过滤）；
+     * `includeSecrets` 仅在电脑端确认 `allow_secret_config=true` 时才传 true，密钥随配置一并同步。
+     * 覆盖本地配置，需谨慎调用。
+     */
+    fun pullConfig(context: Context, conn: LanConnection, includeSecrets: Boolean = false) {
         val resp = conn.getConfig()
         val cfg = resp.optJSONObject("config") ?: throw LanError("配置格式错误")
         val local = ConfigStore.get(context)
         val keys = cfg.keys()
         while (keys.hasNext()) {
             val k = keys.next()
-            if (ConfigStore.isSecretKey(k)) continue
+            if (!includeSecrets && ConfigStore.isSecretKey(k)) continue
             val v = cfg.opt(k)
             if (v != null) local.put(k, v)
         }
@@ -219,14 +263,19 @@ object LanClient {
         ConfigStore.reload(context)
     }
 
-    /** 把本地配置推送到电脑（剔除密钥字段） */
-    fun pushConfig(context: Context, conn: LanConnection) {
+    /**
+     * 把本地配置推送到电脑。
+     * 默认剔除密钥字段（电脑端 `allow_secret_config=false` 时也会过滤）；
+     * `includeSecrets` 仅在电脑端确认 `allow_secret_config=true` 时才传 true。
+     * 覆盖电脑配置，需谨慎调用。
+     */
+    fun pushConfig(context: Context, conn: LanConnection, includeSecrets: Boolean = false) {
         val cfg = ConfigStore.get(context)
         val copy = JSONObject()
         val keys = cfg.keys()
         while (keys.hasNext()) {
             val k = keys.next()
-            if (ConfigStore.isSecretKey(k)) continue
+            if (!includeSecrets && ConfigStore.isSecretKey(k)) continue
             copy.put(k, cfg.opt(k))
         }
         conn.sendConfig(copy)
@@ -238,7 +287,11 @@ object LanClient {
         private var key: ByteArray = ByteArray(32)
         private val writeLock = Any()
 
-        fun connect(ip: String, port: Int, secret: String) {
+        /** 电脑端是否允许密钥同步（由 device_info 确认响应携带） */
+        @Volatile
+        var allowSecretConfig: Boolean = false
+
+        fun connect(ip: String, port: Int, secret: String, deviceInfo: JSONObject) {
             val s = Socket()
             try {
                 s.connect(InetSocketAddress(ip, port), HANDSHAKE_TIMEOUT_MS)
@@ -266,6 +319,19 @@ object LanClient {
                     }
                 }
                 key = deriveKey(secret)
+                s.soTimeout = DEVICE_CONFIRM_TIMEOUT_MS
+                val confirm = request("device_info", deviceInfo)
+                if (!confirm.optBoolean("ok", false)) {
+                    val err = confirm.optString("error", "")
+                    if (err.contains("未知命令")) {
+                        throw LanError("电脑端版本过旧，不支持设备确认，请升级电脑端 OhMyMeme")
+                    }
+                    throw LanError(err.ifEmpty { "电脑端未确认设备信息" })
+                }
+                if (!confirm.optBoolean("approved", false)) {
+                    throw LanError("电脑端拒绝了本次连接")
+                }
+                allowSecretConfig = confirm.optBoolean("allow_secret_config", false)
                 s.soTimeout = IDLE_TIMEOUT_MS
             } catch (e: Exception) {
                 close()

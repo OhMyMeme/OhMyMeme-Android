@@ -1116,16 +1116,68 @@
                     android:text="@string/btn_lan_push"
                     android:textColor="@color/fg"
                     android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
 
                 <TextView
-                    android:id="@+id/btn_lan_config"
+                    android:id="@+id/btn_lan_pull_config"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_pull_config"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_push_config"
                     android:layout_width="0dp"
                     android:layout_height="38dp"
                     android:layout_marginStart="8dp"
                     android:layout_weight="1"
                     android:background="@drawable/btn_secondary"
                     android:gravity="center"
-                    android:text="@string/btn_lan_config"
+                    android:text="@string/btn_lan_push_config"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/lan_key_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/btn_lan_pull_key"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_pull_key"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_push_key"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_push_key"
                     android:textColor="@color/fg"
                     android:textSize="12sp" />
             </LinearLayout>
