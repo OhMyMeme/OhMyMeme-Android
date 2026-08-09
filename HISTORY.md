@@ -1,3 +1,25 @@
+# v0.4.4 — 复制处理落地（WebP 缩放 / GIF 转换 / 隐写 GIF 编码）
+
+## 新增
+
+- **复制处理（对应桌面端 `clipboard_util.py` 的 `convert_image_mode_1/2/3`）** — 分享/点击表情时按设置页「复制处理」模式处理超过 `copy_resize_max`（默认 200）上限的静态图：
+  - **mode 1**：缩放为 WebP（q90，对齐桌面端 `_resize_static_to_webp`）
+  - **mode 2**：转为普通 GIF（256 色，对齐桌面端 `_static_to_gif`）
+  - **mode 3**：转为隐写 GIF —— 生成与原始图同分辨率的基座 GIF 后，用 `GifStego.encode` 把原图信息（FULL 全图 / RGB/L/RGBA 差值，候选取最小）写入 GIF 尾部，接收方可运行解码工具无损还原（对齐桌面端 `make_stego_gif` + `_candidates`）
+  - 动图 / 未超限 / 处理失败一律回退原图直发，对齐桌面端行为
+- **`GifEncoder`（新文件）** — 自研最小 GIF 编码器：median cut 量化到 256 色 + LZW 压缩，输出单帧 GIF89a；LZW 码长升位时机与 `GifFrameDecoder` 严格对应（已用 Python + Pillow 逐字节验证跨 512/1024/2048 边界与表满场景）
+- **`GifStego.encode`（新增）** — 设备端隐写写入：`FULL`/`DELTA_LZMA`/`RGBA_LZMA`/`L_LZMA` 候选恒生成，WebP 候选在 API 30+ 用 `WEBP_LOSSLESS` 生成（低版本跳过，纯 LZMA 亦可还原）；LZMA 用 `XZOutputStream`（preset 6）
+- **`MemeCopyProcessor`（新文件）** — 复制处理的 Android 入口：读 `copy_resize_mode`/`copy_resize_max` 配置、`isAnimatedFile` 判动图、`BitmapFactory` 解码（反预乘 alpha，对齐 Pillow 像素）、按模式转换
+
+## 修复
+
+- 修复签名未统一问题导致无法更新
+
+## 其他
+
+- **版本号** — versionCode 8 / versionName 0.4.4
+- 新增单测：`GifEncoderTest`（256 色内逐字节精确 + 跨码长边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值模式与 FULL 全图模式 encode→decode 逐字节还原）
+
 # v0.4.3 — WebDAV 手写协议修复
 
 ## 修复

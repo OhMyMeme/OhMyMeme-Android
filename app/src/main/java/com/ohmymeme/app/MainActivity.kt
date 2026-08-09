@@ -740,14 +740,19 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { toast(getString(R.string.share_file_missing)) }
                 return@execute
             }
-            val cache = cacheDir
-            val shareFile = File(cache, "share_${meme.id}_${file.name}")
             try {
-                file.copyTo(shareFile, overwrite = true)
+                val processed = MemeCopyProcessor.process(this, file)
+                val cache = cacheDir
+                val shareFile = if (processed != null) {
+                    processed.file
+                } else {
+                    File(cache, "share_${meme.id}_${file.name}").also { file.copyTo(it, overwrite = true) }
+                }
+                val mime = processed?.mimeType ?: meme.mimeType.ifEmpty { "image/*" }
                 val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
                 runOnUiThread {
                     val share = Intent(Intent.ACTION_SEND).apply {
-                        type = meme.mimeType.ifEmpty { "image/*" }
+                        type = mime
                         putExtra(Intent.EXTRA_STREAM, uri)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }

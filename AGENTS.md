@@ -46,9 +46,11 @@ app/src/main/
     CacheScanner.kt     # 缓存扫描（双重去重）
     MemeImporter.kt     # SAF 批量导入
     GifFrameDecoder.kt  # 自研最小 GIF 解码器（LZW/interlace/色板，与 Pillow 一致）
-    GifStego.kt         # STG3 隐写检测 + 7 模式解码 + 自研 PNG 编码
+    GifEncoder.kt       # 自研最小 GIF 编码器（median cut 256 色 + LZW，与 GifFrameDecoder 严格对应）
+    GifStego.kt         # STG3 隐写检测 + 7 模式解码 + encode 写入（FULL/LZMA/WebP 候选）+ 自研 PNG 编码
     AndroidGifDecoder.kt# 设备端 WebP→RGBA（反预乘 alpha）
     Thumbnailer.kt      # 缩略图生成 {id}_{size}.png
+    MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 缩放 WebP / 转 GIF / 转隐写 GIF
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
     LanClient.kt        # 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话）
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
@@ -193,16 +195,34 @@ Android/data/com.ohmymeme.app/
 ## 构建 & 验证
 ```bash
 ./gradlew :app:compileDebugKotlin   # 快速编译验证（约 12-19s）
-./gradlew :app:assembleDebug        # 完整构建 APK
+./gradlew :app:assembleRelease      # 完整构建已签名 Release APK
 ```
 - **跑 gradle 必须设置超时**（`timeout` 参数 600s+），否则可能卡死
+- **签名**：Release 与 Debug 共用共享密钥（`keystore/ohmymeme-release.jks` + 项目根 `keystore.properties`，
+  均 gitignored，来自私有仓库 `OhMyMeme/OhMyMeme-Android-keystore`）；没有密钥时打包报错（刻意保证签名一致）
+- **新成员**：先跑 `scripts/setup-keystore.ps1`（从私有密钥仓库拷贝 keystore 到 gitignored 路径），
+  否则 `assembleRelease`/`assembleDebug` 在打包时报 `SigningConfig "shared" is missing required property "storeFile"`
+- **APK 命名**：`app/build.gradle.kts` 顶部 `appVersionName`（与 defaultConfig.versionName 一致），
+  AGP 9 通过 `androidComponents.onVariants` 注册 `renameReleaseApk` 任务，产物
+  `app/build/outputs/apk/release/OhMyMeme-Android-{appVersionName}.apk`
+- **CI 签名**：`build.yml` 从 Secrets（`SIGNING_KEYSTORE_BASE64`/`SIGNING_STORE_PASSWORD`/`SIGNING_KEY_ALIAS`/`SIGNING_KEY_PASSWORD`）
+  解码 keystore 并注入环境变量构建 `assembleRelease`；本地构建读 `keystore.properties`
 - 用户通常自行 `assembleDebug`，改动后先跑 `compileDebugKotlin` 验证
 
 ## CI（.github/workflows，参考桌面端）
 - `check.yml`：push/PR 触发，JDK 17 跑 `compileDebugKotlin` + `lintDebug` + `testDebugUnitTest`
-- `build.yml`：Check 成功（main）或手动触发，跑 `assembleDebug` 并上传 `app/build/outputs/apk/debug/*.apk` artifact
+- `build.yml`：Check 成功（main）或手动触发，跑 `assembleRelease`（Secrets 解码签名密钥）并上传
+  `app/build/outputs/apk/release/*.apk` artifact
 
 ## 已实现 / 未实现
+### 复制处理（MemeCopyProcessor.kt + GifEncoder.kt + GifStego.encode）
+- 对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3`（`_resize_static_to_webp`/`_static_to_gif`/`_make_stego_gif`）+ `gif_stego.py` `_candidates`/`make_stego_gif`
+- `MemeCopyProcessor.process(context, file)`：`copy_resize_mode==0` 或 `isAnimatedFile`（动图）或未超 `copy_resize_max` 时返回 null 回退原图；模式 1 缩放 WebP(q90，ARGB_8888 解码，LANCZOS 语义用 `createScaledBitmap` 替代)、模式 2 转 GIF、模式 3 转隐写 GIF
+- 像素对齐 Pillow：`getPixels` 取预乘 ARGB 后**反预乘**还原真实 RGB（同 `AndroidGifDecoder`）；kind 判定 `bmp.hasAlpha()`→RGBA、全像素 r==g==b→L、否则 RGB（对应桌面端 `_delta_data` 的 mode 判定）
+- `GifEncoder`（纯 JVM，可单测）：median cut 量化到 ≤256 色 + GIF89a/LZW 编码；**LZW 码长升位时机 = 新增条目后 `nextCode == (1 shl codeSize) + 1`**（非标准实现常见的 `== 1 shl codeSize`），与 `GifFrameDecoder.lzwDecode` 的 `dict.size == 1 shl codeSize` 延迟升位严格对应，已用 Python+Pillow 跨 512/1024/2048 边界与表满场景逐字节验证
+- `GifStego.encode(gifData, origBytes, origExt, origPixels, kind, w, h, webpLossless?)`：生成 FULL（`extLen+ext+origBytes` 整体 LZMA）与差值候选（LZMA 恒生成；WebP 候选仅当 `webpLossless` 回调返回非空，Android 端 API 30+ 用 `WEBP_LOSSLESS` 保证无损，低版本跳过），取 payload 最小者；LZMA 用 `XZOutputStream`（`LZMA2Options(6)`，preset 9 太重）；RGBA 不生成 WebP 候选（libwebp 可能改写全透明像素 RGB）
+- 单测：`GifEncoderTest`（256 色内逐字节精确、灰度精确、跨边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值与 FULL 全图 encode→decode 逐字节还原，FULL 用「极小 origBytes + 大差值」保证选中）
+
 ### 已实现
 - 主界面 / 设置页暗色 UI 复刻
 - 存储层：路径、SQLite 数据库、JSON 配置 + 密钥加密
@@ -226,7 +246,8 @@ Android/data/com.ohmymeme.app/
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
 - 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
-- 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用
+- 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
+- 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
 - 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）
 

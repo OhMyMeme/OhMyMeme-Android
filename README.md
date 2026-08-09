@@ -19,7 +19,7 @@
 - **云端同步** — 设置页选择 FTP / S3 / R2 / WebDAV 任一后端，配置凭据后可「测试连接 / 检查同步状态 / 上传到远端 / 从远端下载 / 清理云端孤儿」；远端目录结构与桌面端一致（`memes/` 文件 + `meme-index.json` 清单 v3），SHA-256 比对跳过已同步文件，上传可删除远端多余文件、下载可移除本地多余文件并重建远端分组；同步多线程并发（`sync_threads`，默认 3），主界面一键同步带进度条 / 百分比 / 速度 / 后台运行，完成弹窗提示，均可由设置项控制；可在设置中开启启动时自动获取远端索引 / 自动同步
 - **动图播放** — GIF/WebP 动图在网格中直接播放（受设置页「动图自动播放」开关控制），右上角显示 GIF/WebP/隐写导入角标
 - **长按右键菜单** — 长按表情弹出菜单：重命名 / 收藏 / 添加分组 / 加入小分组 / 从分组移除 / 从最近使用中删除 / 删除，对齐桌面端 webui；分组移除后为空则自动删除该分组（小分组移回上层）
-- **点击分享** — 点击表情卡片经系统分享面板（FileProvider + `ACTION_SEND`）把原图分享到微信/QQ 等，同时自动记入最近使用
+- **点击分享** — 点击表情卡片经系统分享面板（FileProvider + `ACTION_SEND`）把图片分享到微信/QQ 等，同时自动记入最近使用；分享前按设置页「复制处理」模式处理超限静态图（1=缩放为 WebP、2=转为 GIF、3=转为隐写 GIF，对齐桌面端 `convert_image_mode_1/2/3`），动图/未超限直接发原图
 - **接收分享导入** — 从任意应用（微信/QQ/浏览器等）分享图片到 OhMyMeme 即可直接导入（`ACTION_SEND`/`ACTION_SEND_MULTIPLE`）
 - **最近使用** — 点击表情卡片自动记入最近使用，最近使用分组实时刷新
 - **日志导出** — 设置页导出本次运行的 Debug 日志（logcat 按进程 PID 过滤）到用户选择的位置
@@ -38,25 +38,45 @@
 ### 构建
 
 ```bash
-# 编译 Debug APK
-./gradlew :app:assembleDebug
+# 构建 Release APK（已签名，产物 OhMyMeme-Android-{版本}.apk）
+./gradlew :app:assembleRelease
 
 # 仅编译 Kotlin（快速验证）
 ./gradlew :app:compileDebugKotlin
 ```
 
-产物输出到 `app/build/outputs/apk/debug/`。
+产物输出到 `app/build/outputs/apk/release/OhMyMeme-Android-{versionName}.apk`。
+
+> **签名说明**：Release 与 Debug 共用一把共享密钥（`keystore/ohmymeme-release.jks`，来自私有仓库
+> `OhMyMeme/OhMyMeme-Android-keystore`），保证本地/CI 所有 APK 签名一致、可互相覆盖安装。
+> 新成员先运行 `scripts/setup-keystore.ps1` 获取密钥（详见 `keystore/README.md`）；
+> 没有密钥时打包会报错（刻意为之，保证签名一致）。Debug 构建使用同一密钥，安装调试包与正式包互不冲突。
 
 ### CI
 
 GitHub Actions 两个工作流（参考桌面端 `.github/workflows`）：
 
 - `Check` — 每次 push / PR 运行：`compileDebugKotlin` + `lintDebug` + `testDebugUnitTest`（JDK 17）
-- `Build` — Check 通过（main 分支）或手动触发时运行 `assembleDebug`，产出 Debug APK 并上传为 artifact
+- `Build` — Check 通过（main 分支）或手动触发时运行 `assembleRelease`，产出已签名 Release APK
+  `OhMyMeme-Android-{版本}.apk` 并上传为 artifact；签名密钥由 GitHub Secrets 解码（见下）
+
+### GitHub Secrets（签名密钥）
+
+仓库 Secrets 需配置 4 项（`Settings → Secrets and variables → Actions`）：
+
+| Secret | 值 |
+|--------|-----|
+| `SIGNING_KEYSTORE_BASE64` | `keystore/ohmymeme-release.jks` 的 base64（`certutil -encode` 或 `base64` 命令生成） |
+| `SIGNING_STORE_PASSWORD` | keystore 密码 |
+| `SIGNING_KEY_ALIAS` | 密钥别名（默认 `ohmymeme`） |
+| `SIGNING_KEY_PASSWORD` | 密钥密码 |
+
+本地构建则读项目根 `keystore.properties`（gitignored，由 `scripts/setup-keystore.ps1` 从私有密钥仓库拷贝生成）。
 
 ### 安装
 
-将 Debug APK 直接安装到 Android 手机（需开启「允许安装未知来源应用」），或通过 Android Studio 连接设备直接运行。
+将 Release APK（`OhMyMeme-Android-{版本}.apk`）直接安装到 Android 手机（需开启「允许安装未知来源应用」），
+或通过 Android Studio 连接设备直接运行（Debug 构建使用同一签名，可覆盖安装 Release 包）。
 
 ## 使用
 
@@ -170,9 +190,10 @@ com.ohmymeme.app/
 - [x] 小分组（子分组）创建与嵌套胶囊展示（1 层限制，对齐桌面端 create_subcollection / renderCollections）
 - [x] 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
 - [x] 拖拽排序：标题栏「排序」开关 + 长按拖拽换位，全局 reorderMemes / 分组内 reorderCollectionMembers 落库
-- [x] 点击分享：点击卡片经 FileProvider 分享原图到微信/QQ 等（同时记最近使用）
+- [x] 点击分享：点击卡片经 FileProvider 分享到微信/QQ 等（同时记最近使用），分享前按复制处理模式缩放为 WebP / 转 GIF / 转隐写 GIF
 - [x] 接收分享导入：其他应用分享图片到本应用直接导入（ACTION_SEND / SEND_MULTIPLE）
 - [x] 局域网互联：设置页连接电脑端（UDP 发现 / 密钥配对 / 设备确认 / 拉取 / 上传 / 配置双向同步 / 密钥同步）
+- [x] 复制处理：GifEncoder（median cut 256 色 + LZW）与 GifStego.encode（FULL/LZMA/WebP 候选）在设备端实现超限静态图转换/隐写写入
 
 ## 许可证
 

@@ -1,6 +1,8 @@
 package com.ohmymeme.app
 
+import org.tukaani.xz.LZMA2Options
 import org.tukaani.xz.XZInputStream
+import org.tukaani.xz.XZOutputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.CRC32
 import java.util.zip.Deflater
@@ -50,6 +52,121 @@ object GifStego {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 写入隐写数据（对应 gif_stego.py _candidates + encode）：生成 全图/差值 候选并取最小。
+     *
+     * @param gifData 与原始图同分辨率的基座 GIF（GifEncoder 生成）
+     * @param origBytes 原始文件字节（FULL 模式用）
+     * @param origExt 原始扩展名（不含点）
+     * @param origPixels 原始像素，按 kind 布局：RGB(3/px)/RGBA(4/px)/L(1/px)
+     * @param kind "RGB" | "RGBA" | "L"
+     * @param webpLossless 设备端无损 WebP 编码器，接收 +128 偏移后的 RGB 灰度，返回 WebP 字节或 null；
+     *                     null 或返回 null 时跳过 WebP 候选（仅 LZMA + FULL）
+     */
+    fun encode(
+        gifData: ByteArray,
+        origBytes: ByteArray,
+        origExt: String,
+        origPixels: ByteArray,
+        kind: String,
+        w: Int,
+        h: Int,
+        webpLossless: ((shiftedRgb: ByteArray, w: Int, h: Int) -> ByteArray?)? = null
+    ): ByteArray {
+        val gif = GifFrameDecoder.decode(gifData)
+            ?: throw IllegalArgumentException("base gif decode failed")
+        if (gif.width != w || gif.height != h) throw IllegalArgumentException("size mismatch")
+        val n = w * h
+        val gifRgb = gif.rgb
+
+        data class Candidate(val mode: Int, val payload: ByteArray)
+
+        val cands = ArrayList<Candidate>()
+
+        val extBytes = origExt.toByteArray(Charsets.UTF_8)
+        require(extBytes.size <= 255) { "ext too long" }
+        val rawFull = ByteArray(1 + extBytes.size + origBytes.size)
+        rawFull[0] = extBytes.size.toByte()
+        System.arraycopy(extBytes, 0, rawFull, 1, extBytes.size)
+        System.arraycopy(origBytes, 0, rawFull, 1 + extBytes.size, origBytes.size)
+        cands.add(Candidate(MODE_FULL, be32(rawFull.size) + lzmaCompress(rawFull)))
+
+        val head = be32(w) + be32(h)
+
+        when (kind) {
+            "RGB" -> {
+                val delta = ByteArray(n * 3)
+                for (i in 0 until n * 3) {
+                    delta[i] = ((origPixels[i].toInt() and 0xFF) - (gifRgb[i].toInt() and 0xFF) and 0xFF).toByte()
+                }
+                cands.add(Candidate(MODE_DELTA_LZMA, be32(head.size + delta.size) + lzmaCompress(head + delta)))
+                if (webpLossless != null) {
+                    val shifted = ByteArray(n * 3)
+                    for (i in 0 until n * 3) shifted[i] = ((delta[i].toInt() and 0xFF) + 128 and 0xFF).toByte()
+                    val webp = webpLossless(shifted, w, h)
+                    if (webp != null) cands.add(Candidate(MODE_DELTA_WEBP, head + webp))
+                }
+            }
+            "L" -> {
+                val delta = ByteArray(n)
+                for (i in 0 until n) {
+                    val g = luma(gifRgb[i * 3].toInt() and 0xFF, gifRgb[i * 3 + 1].toInt() and 0xFF, gifRgb[i * 3 + 2].toInt() and 0xFF)
+                    delta[i] = ((origPixels[i].toInt() and 0xFF) - g and 0xFF).toByte()
+                }
+                cands.add(Candidate(MODE_L_LZMA, be32(head.size + delta.size) + lzmaCompress(head + delta)))
+                if (webpLossless != null) {
+                    val grayRgb = ByteArray(n * 3)
+                    for (i in 0 until n) {
+                        val v = ((delta[i].toInt() and 0xFF) + 128 and 0xFF).toByte()
+                        grayRgb[i * 3] = v
+                        grayRgb[i * 3 + 1] = v
+                        grayRgb[i * 3 + 2] = v
+                    }
+                    val webp = webpLossless(grayRgb, w, h)
+                    if (webp != null) cands.add(Candidate(MODE_L_WEBP, head + webp))
+                }
+            }
+            "RGBA" -> {
+                val delta = ByteArray(n * 3)
+                val alpha = ByteArray(n)
+                for (i in 0 until n) {
+                    delta[i * 3] = ((origPixels[i * 4].toInt() and 0xFF) - (gifRgb[i * 3].toInt() and 0xFF) and 0xFF).toByte()
+                    delta[i * 3 + 1] = ((origPixels[i * 4 + 1].toInt() and 0xFF) - (gifRgb[i * 3 + 1].toInt() and 0xFF) and 0xFF).toByte()
+                    delta[i * 3 + 2] = ((origPixels[i * 4 + 2].toInt() and 0xFF) - (gifRgb[i * 3 + 2].toInt() and 0xFF) and 0xFF).toByte()
+                    alpha[i] = origPixels[i * 4 + 3]
+                }
+                cands.add(Candidate(MODE_RGBA_LZMA, be32(head.size + delta.size + alpha.size) + lzmaCompress(head + delta + alpha)))
+            }
+            else -> throw IllegalArgumentException("bad kind $kind")
+        }
+
+        val best = cands.minByOrNull { it.payload.size }
+            ?: throw IllegalArgumentException("no candidates")
+        val out = ByteArrayOutputStream()
+        out.write(gifData)
+        out.write(MAGIC)
+        out.write(best.mode)
+        out.write(best.payload)
+        return out.toByteArray()
+    }
+
+    private fun lzmaCompress(data: ByteArray): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val xz = XZOutputStream(bos, LZMA2Options(6))
+        xz.write(data)
+        xz.finish()
+        return bos.toByteArray()
+    }
+
+    private fun be32(v: Int): ByteArray {
+        return byteArrayOf(
+            (v ushr 24).toByte(),
+            (v ushr 16).toByte(),
+            (v ushr 8).toByte(),
+            v.toByte()
+        )
     }
 
     private fun decodeFull(blob: ByteArray): DecodeResult? {
