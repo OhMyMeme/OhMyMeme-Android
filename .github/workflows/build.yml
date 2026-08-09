@@ -23,10 +23,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Make gradlew executable
         run: chmod +x ./gradlew
-      - name: Build Debug APK
-        run: ./gradlew :app:assembleDebug
+      - name: Decode signing keystore
+        shell: bash
+        run: |
+          mkdir -p keystore
+          echo "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > keystore/ohmymeme-release.jks
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/keystore/ohmymeme-release.jks
+          KEYSTORE_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEYSTORE_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEYSTORE_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OhMyMeme-Android-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: OhMyMeme-Android-release
+          path: app/build/outputs/apk/release/*.apk
