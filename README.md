@@ -9,7 +9,8 @@
 - **缓存扫描** — 启动/手动刷新时扫描缓存目录，已有文件自动注册到数据库（文件名 + 哈希双重去重）
 - **缩略图** — 懒生成缩略图到 `thumbnails/{meme_id}_{size}.png`，网格加载
 - **本地数据库** — SQLite (WAL)，7 表 schema 与桌面端 `src/database.py` 完全一致（memes/tags/meme_tags/collections/meme_collections/favorites/recent_uses）
-- **搜索** — 关键词实时筛选（按文件名/原始名），分组/收藏夹/最近使用胶囊过滤（分组带数量，有子分组时追加 `▼`），与桌面端 `search_memes` 一致
+- **搜索** — 关键词实时筛选（按文件名/原始名），分组/收藏夹/最近使用/未分类胶囊过滤（分组带数量，有子分组时追加 `▼`），与桌面端 `search_memes` 一致
+- **「未分类」分组** — 顶栏胶囊显示未加入任何分组的表情（虚拟分组 `id == -4`，对齐桌面端 `webui.py`），仅在存在未分类表情时显示；可在设置页「显示『未分类』分组」开关控制，默认开
 - **小分组** — 顶栏分组胶囊长按新建小分组（仅 1 层，对齐桌面端 `create_subcollection`），子分组胶囊在父分组激活时平铺展开（对齐桌面端 webui 顶栏 `renderCollections`）；表情长按「加入小分组」可选目标子分组或新建，对齐桌面端网格右键
 - **分组管理** — 长按顶栏分组胶囊弹菜单：新建小分组 / 重命名分组 / 删除分组（成员移回上层，对齐桌面端 `rename_collection`/`delete_collection`），最近使用分组长按可清空最近使用（对齐桌面端 `clear_recent`）
 - **拖拽排序** — 标题栏「排序」开关进入排序模式，长按表情拖拽换位；全局视图落库 `reorderMemes`，分组视图内落库 `reorderCollectionMembers`，搜索中/收藏夹/最近使用禁用（对齐桌面端 `toggleDragSort`/`canReorderMemes`）
@@ -190,6 +191,7 @@ com.ohmymeme.app/
 - [x] 小分组（子分组）创建与嵌套胶囊展示（1 层限制，对齐桌面端 create_subcollection / renderCollections）
 - [x] 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
 - [x] 拖拽排序：标题栏「排序」开关 + 长按拖拽换位，全局 reorderMemes / 分组内 reorderCollectionMembers 落库
+- [x] 「未分类」分组（虚拟 id=-4，对齐桌面端 webui.py）+ 设置页「显示『未分类』分组」开关（show_uncategorized）
 - [x] 点击分享：点击卡片经 FileProvider 分享到微信/QQ 等（同时记最近使用），分享前按复制处理模式缩放为 WebP / 转 GIF / 转隐写 GIF
 - [x] 接收分享导入：其他应用分享图片到本应用直接导入（ACTION_SEND / SEND_MULTIPLE）
 - [x] 局域网互联：设置页连接电脑端（UDP 发现 / 密钥配对 / 设备确认 / 拉取 / 上传 / 配置双向同步 / 密钥同步）

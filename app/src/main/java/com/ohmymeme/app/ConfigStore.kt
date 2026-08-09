@@ -60,6 +60,7 @@ object ConfigStore {
         "webdav_timeout" to 30,
         "copy_resize_mode" to 1,
         "copy_resize_max" to 200,
+        "show_uncategorized" to true,
         "theme" to "dark",
         "window_x" to -1,
         "window_y" to -1,

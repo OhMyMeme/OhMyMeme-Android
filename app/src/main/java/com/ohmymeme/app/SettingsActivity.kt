@@ -141,6 +141,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun loadConfig() {
         val cfg = ConfigStore.get(this)
         findViewById<SwitchMaterial>(R.id.sw_gif).isChecked = cfg.optBoolean("auto_play_gif", true)
+        findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked =
+            cfg.optBoolean("show_uncategorized", true)
         findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 1))
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
@@ -678,6 +680,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun saveConfig() {
         ConfigStore.set(this, "auto_play_gif", findViewById<SwitchMaterial>(R.id.sw_gif).isChecked)
+        ConfigStore.set(this, "show_uncategorized", findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked)
         ConfigStore.set(this, "copy_resize_mode", findViewById<Spinner>(R.id.sp_copy_mode).selectedItemPosition)
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)

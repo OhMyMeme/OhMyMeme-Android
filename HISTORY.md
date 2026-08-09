@@ -1,3 +1,12 @@
+# v0.4.5 — 「未分类」分组（对齐桌面端）
+
+## 新增
+
+- **「未分类」虚拟分组（`id == -4`）** — 顶栏分组胶囊新增「未分类」，列出未加入任何分组的表情，对齐桌面端 `webui.py`（`search_memes` 的 `collection_id == -4` + `get_collections` 系统分组）；只在 `count(uncategorized_only=True) > 0` 时显示，清零后自动隐藏并退出该视图，行为与收藏夹/最近使用一致
+- **查询支持** — `MemeDb.search`/`count` 新增 `uncategorizedOnly` 参数，对应桌面端 `database.py` 的 `uncategorized_only`（`NOT EXISTS (SELECT 1 FROM meme_collections mc WHERE mc.meme_id = m.id)`）
+- **设置开关** — 设置页新增「分组」区块 + 「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py` 默认 + `settings.html` 勾选框）
+- 虚拟分组不落库，`CloudSync` 清单（仅遍历真实 `collections` 表）天然不受影响；负数 id 使拖拽排序/长按分组菜单自动禁用，与收藏夹/最近使用一致
+
 # v0.4.4 — 复制处理落地（WebP 缩放 / GIF 转换 / 隐写 GIF 编码）
 
 ## 新增

@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val COLLECTION_FAVORITES = -2L
         private const val COLLECTION_RECENT = -3L
+        private const val COLLECTION_UNCATEGORIZED = -4L
     }
 
     private val importLauncher =
@@ -323,6 +324,18 @@ class MainActivity : AppCompatActivity() {
         if (recentCount > 0) {
             display.add(CollectionEntry(COLLECTION_RECENT, getString(R.string.collection_recent), recentCount))
         }
+        if (ConfigStore.get(this).optBoolean("show_uncategorized", true)) {
+            val uncategorizedCount = db.count(uncategorizedOnly = true)
+            if (uncategorizedCount > 0) {
+                display.add(
+                    CollectionEntry(
+                        COLLECTION_UNCATEGORIZED,
+                        getString(R.string.collection_uncategorized),
+                        uncategorizedCount
+                    )
+                )
+            }
+        }
         fun flatten(items: List<CollectionNode>, parentActive: Boolean) {
             items.forEach { node ->
                 val entry = node.entry
@@ -581,6 +594,12 @@ class MainActivity : AppCompatActivity() {
                     limit = 10000
                 )
                 activeCollectionId == COLLECTION_RECENT -> db.getRecent(10000)
+                activeCollectionId == COLLECTION_UNCATEGORIZED -> db.search(
+                    keyword = currentKeyword,
+                    uncategorizedOnly = true,
+                    offset = 0,
+                    limit = 10000
+                )
                 currentKeyword.isEmpty() && activeCollectionId == null ->
                     db.getAll(limit = 10000)
                 else -> db.search(
