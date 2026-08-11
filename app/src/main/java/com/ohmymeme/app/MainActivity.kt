@@ -11,7 +11,6 @@ import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -45,7 +44,7 @@ class MainActivity : AppCompatActivity() {
     private val syncExecutor = Executors.newSingleThreadExecutor()
     private var currentKeyword = ""
     private var activeCollectionId: Long? = null
-    private var sortEnabled = false
+    private var latestReloadId = 0L
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
@@ -161,7 +160,6 @@ class MainActivity : AppCompatActivity() {
     private fun setupTitleButtons() {
         findViewById<TextView>(R.id.btn_import).setOnClickListener { showImportMenu(it) }
         findViewById<View>(R.id.btn_refresh).setOnClickListener { rescanCache() }
-        findViewById<View>(R.id.btn_sort).setOnClickListener { toggleSort() }
         findViewById<View>(R.id.btn_settings).setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
@@ -584,51 +582,52 @@ class MainActivity : AppCompatActivity() {
 
     private fun reloadData() {
         reloadBars()
+        val keyword = currentKeyword
+        val collectionId = activeCollectionId
+        latestReloadId += 1
+        val reloadId = latestReloadId
         executor.execute {
             val db = MemeDb.get(this)
             val memes = when {
-                activeCollectionId == COLLECTION_FAVORITES -> db.search(
-                    keyword = currentKeyword,
+                collectionId == COLLECTION_FAVORITES -> db.search(
+                    keyword = keyword,
                     favoriteOnly = true,
                     offset = 0,
                     limit = 10000
                 )
-                activeCollectionId == COLLECTION_RECENT -> db.getRecent(10000)
-                activeCollectionId == COLLECTION_UNCATEGORIZED -> db.search(
-                    keyword = currentKeyword,
+                collectionId == COLLECTION_RECENT -> db.getRecent(10000)
+                collectionId == COLLECTION_UNCATEGORIZED -> db.search(
+                    keyword = keyword,
                     uncategorizedOnly = true,
                     offset = 0,
                     limit = 10000
                 )
-                currentKeyword.isEmpty() && activeCollectionId == null ->
+                keyword.isEmpty() && collectionId == null ->
                     db.getAll(limit = 10000)
                 else -> db.search(
-                    keyword = currentKeyword,
-                    collectionId = activeCollectionId,
+                    keyword = keyword,
+                    collectionId = collectionId,
                     offset = 0,
                     limit = 10000
                 )
             }
-            android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$currentKeyword'")
+            android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$keyword'")
             runOnUiThread {
+                if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
                     rv.layoutManager = GridLayoutManager(this, 3)
-                    val sortable = sortEnabled && currentKeyword.isEmpty() &&
-                        (activeCollectionId == null || activeCollectionId!! > 0)
-                    val adapter = MemeGridAdapter(this, memes).apply {
+                    (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
+                    rv.setTag(R.id.tag_sort_helper, null)
+                    val canOrder = canOrderCards(keyword, collectionId, memes.size)
+                    val adapter = MemeGridAdapter(this, memes, canOrder).apply {
                         onItemClick = { _, meme -> onMemeClick(meme) }
-                        onLongClick = if (sortable) null
-                        else { anchor, meme -> showMemeMenu(anchor, meme) }
+                        onLongClick = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                     rv.adapter = adapter
-                    if (sortable) {
-                        rv.setTag(R.id.tag_sort_helper, ItemTouchHelper(SortCallback(adapter)).apply {
-                            attachToRecyclerView(rv)
-                        })
-                    } else {
-                        (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
-                        rv.setTag(R.id.tag_sort_helper, null)
-                    }
+                    val helper = ItemTouchHelper(SortCallback(adapter, collectionId))
+                    adapter.onDragStart = { holder -> helper.startDrag(holder) }
+                    helper.attachToRecyclerView(rv)
+                    rv.setTag(R.id.tag_sort_helper, helper)
                 }
                 findViewById<View>(R.id.empty_state).visibility =
                     if (memes.isEmpty()) View.VISIBLE else View.GONE
@@ -927,19 +926,10 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
-    private fun toggleSort() {
-        sortEnabled = !sortEnabled
-        findViewById<ImageView>(R.id.btn_sort).setImageTintList(
-            android.content.res.ColorStateList.valueOf(
-                getColor(if (sortEnabled) R.color.accent else R.color.muted)
-            )
-        )
-        toast(getString(if (sortEnabled) R.string.sort_on else R.string.sort_off))
-        reloadData()
-    }
-
-    private inner class SortCallback(private val adapter: MemeGridAdapter) :
-        ItemTouchHelper.Callback() {
+    private inner class SortCallback(
+        private val adapter: MemeGridAdapter,
+        private val collectionId: Long?
+    ) : ItemTouchHelper.Callback() {
 
         override fun getMovementFlags(
             recyclerView: RecyclerView,
@@ -961,18 +951,17 @@ class MainActivity : AppCompatActivity() {
 
         override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
 
-        override fun isLongPressDragEnabled() = true
+        override fun isLongPressDragEnabled() = false
 
         override fun clearView(
             recyclerView: RecyclerView,
             viewHolder: RecyclerView.ViewHolder
         ) {
             super.clearView(recyclerView, viewHolder)
+            val ids = adapter.currentIds()
             executor.execute {
-                val ids = adapter.currentIds()
-                val cid = activeCollectionId
-                if (cid != null && cid > 0) {
-                    MemeDb.get(this@MainActivity).reorderCollectionMembers(cid, ids)
+                if (collectionId != null && collectionId > 0) {
+                    MemeDb.get(this@MainActivity).reorderCollectionMembers(collectionId, ids)
                 } else {
                     MemeDb.get(this@MainActivity).reorderMemes(ids)
                 }

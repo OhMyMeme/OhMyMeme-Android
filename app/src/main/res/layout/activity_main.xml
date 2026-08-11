@@ -33,17 +33,6 @@
             android:layout_weight="1" />
 
         <ImageView
-            android:id="@+id/btn_sort"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_title_btn"
-            android:contentDescription="@string/action_sort"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="7dp"
-            android:src="@drawable/ic_sort"
-            app:tint="@color/muted" />
-
-        <ImageView
             android:id="@+id/btn_upload"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
