@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/act_sync_push"
+        android:title="@string/btn_sync_push" />
+    <item
+        android:id="@+id/act_sync_pull"
+        android:title="@string/btn_sync_pull" />
+    <item
+        android:id="@+id/act_refresh"
+        android:title="@string/refresh" />
+</menu>
