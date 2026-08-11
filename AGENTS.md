@@ -239,7 +239,7 @@ Android/data/com.ohmymeme.app/
 - 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses，最近使用分组自动刷新
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
-- 顶部快捷同步：主界面标题栏上传/下载图标，一键 push/pull
+- 顶部快捷同步：主界面标题栏「更多」菜单提供上传/下载，一键 push/pull
 - 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要
 - 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新 localdata 目录，弹窗询问是否转移现有文件（数据库/缓存/缩略图），config.json 保持不变
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
