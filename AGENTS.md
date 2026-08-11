@@ -115,7 +115,7 @@ Android/data/com.ohmymeme.app/
 - 名称取 `original_name`，为空回退文件名去扩展名
 - **动图渲染**（对应桌面端 webui `m.is_animated && m.auto_play_gif`）：后台判 `isAnimatedFile`（`FileUtils.isAnimatedFile`：GIF89a 头或 RIFF+WEBP+ANIM；webp 直查 cache 根避免全目录遍历），且 `ConfigStore` 的 `auto_play_gif` 为 true 时用 `ImageDecoder` + `AnimatedImageDrawable`（`setTargetSampleSize` 目标 300）播放原图，否则用静态缩略图；动画解码失败回退缩略图
 - 右上角 badge：GIF / WebP（动图）/ 隐写导入（`fromStego==1`），`bg_badge.xml` 蓝底圆角
-- 长按回调 `onLongClick` 属性，由 MainActivity 弹 PopupMenu
+- 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
 ### 长按右键菜单（MainActivity.kt）
 - `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
@@ -143,9 +143,9 @@ Android/data/com.ohmymeme.app/
 - 取消收藏/移出最近使用后，若对应系统分组（收藏夹/最近使用）计数归零，自动退出该视图
 
 ### 拖拽排序（MainActivity.kt）
-- 标题栏「排序」按钮（`btn_sort`）开关 `sortEnabled`，开启后高亮 accent 色并 Toast 提示
-- 对齐桌面端 `toggleDragSort`/`canReorderMemes`：仅当 `sortEnabled && 关键词为空 && (activeCollectionId == null || > 0)` 时可排序（搜索中/收藏夹/最近使用禁用）
-- 可排序时用 `ItemTouchHelper`（`SortCallback`，`isLongPressDragEnabled`）支持长按拖拽换位，此时禁 `onLongClick` 右键菜单（手势冲突）；否则恢复右键菜单
+- 无标题栏排序按钮或 `sortEnabled` 模式。仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
+- 搜索中，以及收藏夹 `-2`、最近使用 `-3`、未分类 `-4` 视图均隐藏手柄且不得重排
+- `ItemTouchHelper` 的 `SortCallback.isLongPressDragEnabled()` 返回 false。仅手柄按下后拖动可调用 `startDrag`；卡片主体点击继续分享，主体长按继续打开右键菜单
 - `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
 - `MemeGridAdapter` 持有可变 `items`，`move(from,to)` 用 `notifyItemMoved`，`currentIds()` 供落库取序
 
@@ -245,7 +245,7 @@ Android/data/com.ohmymeme.app/
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
-- 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
+- 拖拽排序：无标题栏开关；仅在空搜索、全局或正数真实分组且至少 2 张卡片时，由卡片左上手柄启动。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
 - 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
