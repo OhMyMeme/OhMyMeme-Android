@@ -28,6 +28,20 @@
             android:src="@drawable/ic_photo"
             app:tint="@color/muted" />
 
+        <ImageView
+            android:id="@+id/btn_drag_handle"
+            android:layout_width="20dp"
+            android:layout_height="25dp"
+            android:layout_gravity="top|start"
+            android:layout_marginStart="-2dp"
+            android:layout_marginTop="-4dp"
+            android:background="@drawable/bg_drag_handle"
+            android:contentDescription="@string/action_drag_to_reorder"
+            android:padding="5dp"
+            android:src="@drawable/ic_drag_handle"
+            android:visibility="gone"
+            app:tint="@color/fg" />
+
         <TextView
             android:id="@+id/tv_meme_badge"
             android:layout_width="wrap_content"

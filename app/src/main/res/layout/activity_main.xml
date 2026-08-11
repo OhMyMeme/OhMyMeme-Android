@@ -32,40 +32,6 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
-        <ImageView
-            android:id="@+id/btn_sort"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_title_btn"
-            android:contentDescription="@string/action_sort"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="7dp"
-            android:src="@drawable/ic_sort"
-            app:tint="@color/muted" />
-
-        <ImageView
-            android:id="@+id/btn_upload"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_title_btn"
-            android:contentDescription="@string/btn_sync_push"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="7dp"
-            android:src="@drawable/ic_upload"
-            app:tint="@color/muted" />
-
-        <ImageView
-            android:id="@+id/btn_download"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:background="@drawable/bg_title_btn"
-            android:contentDescription="@string/btn_sync_pull"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="7dp"
-            android:src="@drawable/ic_download"
-            app:tint="@color/muted" />
-
         <TextView
             android:id="@+id/btn_import"
             android:layout_width="wrap_content"
@@ -79,17 +45,6 @@
             android:textSize="12.5sp" />
 
         <ImageView
-            android:id="@+id/btn_refresh"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_title_btn"
-            android:contentDescription="@string/refresh"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="7dp"
-            android:src="@drawable/ic_refresh"
-            app:tint="@color/muted" />
-
-        <ImageView
             android:id="@+id/btn_settings"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -98,6 +53,18 @@
             android:paddingHorizontal="10dp"
             android:paddingVertical="7dp"
             android:src="@drawable/ic_settings"
+            app:tint="@color/muted" />
+
+        <ImageView
+            android:id="@+id/btn_more"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/more_actions"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_more_vert"
             app:tint="@color/muted" />
     </LinearLayout>
 
