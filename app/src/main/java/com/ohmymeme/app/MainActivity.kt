@@ -159,12 +159,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupTitleButtons() {
         findViewById<TextView>(R.id.btn_import).setOnClickListener { showImportMenu(it) }
-        findViewById<View>(R.id.btn_refresh).setOnClickListener { rescanCache() }
+        findViewById<View>(R.id.btn_more).setOnClickListener { showMoreActionsMenu(it) }
         findViewById<View>(R.id.btn_settings).setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
-        findViewById<View>(R.id.btn_upload).setOnClickListener { quickSync(isUpload = true) }
-        findViewById<View>(R.id.btn_download).setOnClickListener { quickSync(isUpload = false) }
     }
 
     private fun quickSync(isUpload: Boolean) {
@@ -853,6 +851,20 @@ class MainActivity : AppCompatActivity() {
                 R.id.act_import_files -> pickImages()
                 R.id.act_import_album -> pickAlbumImages()
                 R.id.act_import_qq -> toast(getString(R.string.import_qq_pending))
+            }
+            true
+        }
+        popup.show()
+    }
+
+    private fun showMoreActionsMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menuInflater.inflate(R.menu.menu_more_actions, popup.menu)
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.act_sync_push -> quickSync(isUpload = true)
+                R.id.act_sync_pull -> quickSync(isUpload = false)
+                R.id.act_refresh -> rescanCache()
             }
             true
         }
