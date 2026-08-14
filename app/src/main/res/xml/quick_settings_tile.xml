@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<quick-settings-tile xmlns:android="http://schemas.android.com/apk/res/android"
+    android:icon="@drawable/ic_qs_tile"
+    android:label="@string/tile_label" />

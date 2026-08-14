@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
+import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.LayoutInflater
 import android.view.View
@@ -24,8 +25,10 @@ class MemeGridAdapter(
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     var onItemClick: ((View, Meme) -> Unit)? = null
-    var onLongClick: ((View, Meme) -> Unit)? = null
-    var onDragStart: ((MemeViewHolder) -> Unit)? = null
+    var onMenuClick: ((View, Meme) -> Unit)? = null
+    var onDragStart: ((View, Meme) -> Unit)? = null
+    var onDragFailed: ((View, Meme) -> Unit)? = null
+    var onReorderStart: ((MemeViewHolder) -> Unit)? = null
 
     fun move(from: Int, to: Int) {
         if (from == to) return
@@ -49,6 +52,7 @@ class MemeGridAdapter(
         val name = holder.itemView.findViewById<TextView>(R.id.tv_meme_name)
         val badge = holder.itemView.findViewById<TextView>(R.id.tv_meme_badge)
         val dragHandle = holder.itemView.findViewById<ImageView>(R.id.btn_drag_handle)
+        val menuButton = holder.itemView.findViewById<View>(R.id.btn_meme_menu)
         (img.drawable as? AnimatedImageDrawable)?.stop()
         img.setImageResource(R.drawable.ic_photo)
         img.setColorFilter(context.getColor(R.color.muted))
@@ -58,9 +62,19 @@ class MemeGridAdapter(
             onItemClick?.invoke(it, meme)
         }
         holder.itemView.setOnLongClickListener {
-            onLongClick?.invoke(it, meme)
+            onDragStart?.invoke(it, meme)
             true
         }
+        holder.itemView.setOnDragListener { v, e ->
+            if (e.action == DragEvent.ACTION_DRAG_ENDED && !e.result) {
+                onDragFailed?.invoke(v, meme)
+            }
+            true
+        }
+        menuButton.setOnClickListener {
+            onMenuClick?.invoke(it, meme)
+        }
+        menuButton.setOnLongClickListener { true }
         dragHandle.visibility = if (canOrder) View.VISIBLE else View.GONE
         dragHandle.setOnTouchListener(null)
         if (canOrder) {
@@ -69,7 +83,7 @@ class MemeGridAdapter(
                 if (holder.bindingAdapterPosition == RecyclerView.NO_POSITION) {
                     return@setOnTouchListener false
                 }
-                onDragStart?.invoke(holder)
+                onReorderStart?.invoke(holder)
                 true
             }
         }

@@ -39,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
         setupExportLogs()
         setupStorage()
         setupLan()
+        setupQuickSettings()
     }
 
     private fun setupTitle() {
@@ -541,6 +542,17 @@ class SettingsActivity : AppCompatActivity() {
     private fun setupExportLogs() {
         findViewById<TextView>(R.id.btn_export_logs).setOnClickListener {
             exportLogsLauncher.launch("OhMyMeme-logs.txt")
+        }
+    }
+
+    /** 控制中心快捷开关：弹出操作指引（系统磁贴需用户手动从快捷设置编辑面板添加） */
+    private fun setupQuickSettings() {
+        findViewById<TextView>(R.id.btn_add_qs_tile).setOnClickListener {
+            android.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.qs_tile_title))
+                .setMessage(getString(R.string.qs_tile_add_instructions))
+                .setPositiveButton(getString(R.string.ok), null)
+                .show()
         }
     }
 
