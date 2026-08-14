@@ -220,6 +220,15 @@
     <string name="storage_moved">存储位置已修改</string>
     <string name="storage_move_failed">存储位置修改失败</string>
 
+    <string name="qs_tile_title">快捷开关</string>
+    <string name="tile_label">OhMyMeme</string>
+    <string name="btn_add_qs_tile">添加到控制中心</string>
+    <string name="qs_tile_add_hint">添加后可在通知栏控制中心一键打开 OhMyMeme</string>
+    <string name="qs_tile_add_instructions">1. 下拉通知栏两次\n2. 点击快捷设置右下角的「编辑」（铅笔）图标\n3. 在可用磁贴中找到「OhMyMeme」，按住拖到上方网格\n4. 完成后点击磁贴即可一键打开程序\n\n长按磁贴可移动或移除。</string>
+
+    <string name="action_meme_menu">更多操作</string>
+    <string name="drag_file_missing">文件缺失</string>
+
     <string name="btn_reset">恢复默认</string>
     <string name="btn_save">保存</string>
     <string name="config_saved">已保存</string>

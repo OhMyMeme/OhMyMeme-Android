@@ -1,6 +1,7 @@
 package com.ohmymeme.app
 
 import android.app.AlertDialog
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -619,11 +620,13 @@ class MainActivity : AppCompatActivity() {
                     val canOrder = canOrderCards(keyword, collectionId, memes.size)
                     val adapter = MemeGridAdapter(this, memes, canOrder).apply {
                         onItemClick = { _, meme -> onMemeClick(meme) }
-                        onLongClick = { anchor, meme -> showMemeMenu(anchor, meme) }
+                        onMenuClick = { anchor, meme -> showMemeMenu(anchor, meme) }
+                        onDragStart = { view, meme -> startGlobalDrag(view, meme) }
+                        onDragFailed = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                     rv.adapter = adapter
                     val helper = ItemTouchHelper(SortCallback(adapter, collectionId))
-                    adapter.onDragStart = { holder -> helper.startDrag(holder) }
+                    adapter.onReorderStart = { holder -> helper.startDrag(holder) }
                     helper.attachToRecyclerView(rv)
                     rv.setTag(R.id.tag_sort_helper, helper)
                 }
@@ -869,6 +872,44 @@ class MainActivity : AppCompatActivity() {
             true
         }
         popup.show()
+    }
+
+    /** 相册式跨应用拖拽：长按卡片直接拖入聊天软件，SAF 模式先物化到 cacheDir 再经 FileProvider 暴露 */
+    private fun startGlobalDrag(itemView: View, meme: Meme) {
+        executor.execute {
+            val file = materializeDragFile(meme)
+            runOnUiThread {
+                if (file == null) {
+                    toast(getString(R.string.drag_file_missing))
+                    return@runOnUiThread
+                }
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+                val label = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
+                val data = ClipData.newUri(contentResolver, label, uri)
+                val shadow = itemView.findViewById<View>(R.id.img_meme) ?: itemView
+                itemView.startDragAndDrop(
+                    data,
+                    View.DragShadowBuilder(shadow),
+                    meme,
+                    View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ
+                )
+                recordUse(meme)
+            }
+        }
+    }
+
+    /** 拖拽源文件物化：真实路径/SAF 统一复制到内部 cacheDir，保证 FileProvider 路径一致 */
+    private fun materializeDragFile(meme: Meme): File? {
+        return try {
+            val stor = Thumbnailer.findMemeFile(this, meme.filename) ?: return null
+            val ext = meme.filename.substringAfterLast('.', "img")
+            val tmp = File(cacheDir, "drag_${meme.id}_${System.nanoTime()}.$ext")
+            stor.copyTo(tmp)
+            tmp
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "materializeDragFile failed: $e")
+            null
+        }
     }
 
     private fun pickAlbumImages() {

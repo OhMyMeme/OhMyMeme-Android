@@ -1,3 +1,18 @@
+# v0.4.6 — 控制中心快捷按钮 + 相册式拖拽
+
+## 新增
+
+- **通知栏控制中心快捷按钮** — 新增系统快捷设置磁贴（`TileService`，`QuickTileService`），点击即可一键打开主界面（锁屏时先解锁再打开）；设置页新增「快捷开关」区块 + 「添加到控制中心」按钮，弹出操作指引帮助用户把磁贴加入通知栏控制中心
+- **主界面长按卡片直接拖拽到聊天软件（相册式）** — 长按网格卡片直接发起跨应用 Drag & Drop（`View.startDragAndDrop` + `ClipData.newUri` + `DRAG_FLAG_GLOBAL|DRAG_FLAG_GLOBAL_URI_READ`），拖拽影子跟随手指，把图片拖入微信/QQ 等聊天窗口（SAF 模式下先物化到 `cacheDir` 再经 FileProvider 暴露 content URI），同时记入最近使用；卡片右上角新增「⋯」按钮（`btn_meme_menu`）承载原右键菜单（重命名/收藏/分组/删除）；拖拽未被任何目标接收（`ACTION_DRAG_ENDED` 无放置）时自动弹原右键菜单兜底（含「分享」入口）；点击分享/排序手柄/动图播放均不受影响
+
+## 修复
+
+- **悬浮窗拖拽方案在鸿蒙/Huawei 上无法发起（长按无拖拽影子）** — 根因：`TYPE_APPLICATION_OVERLAY`（WindowManager 悬浮窗）在鸿蒙/Huawei ROM 上不进入全局拖拽管道，只有普通 Activity 窗口（如系统相册）可以。已删除悬浮窗方案（`MemeDragService`、`OverlayMemeAdapter`、overlay 布局/菜单/资源、`SYSTEM_ALERT_WINDOW`/FGS 权限与 Service 声明），改为上方相册式交互（拖拽由 Activity 窗口内的卡片视图发起，与系统相册同窗口类型）
+
+## 其他
+
+- **版本号** — versionCode 10 / versionName 0.4.6
+
 # v0.4.5 — 「未分类」分组 + 局域网直连 + 存储位置 SAF 全量支持
 
 ## 新增
