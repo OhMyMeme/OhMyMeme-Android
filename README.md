@@ -2,6 +2,8 @@
 
 轻量化表情包管理系统的安卓端 — 与桌面端（[OhMyMeme](https://github.com/OhMyMeme/OhMyMeme)）存储结构一致，便于多端同步。
 
+![picture](https://raw.githubusercontent.com/OhMyMeme/OhMyMeme-Android/refs/heads/dev/resource/picture.gif)
+
 ## 功能
 
 - **暗色 UI 复刻** — 主界面 / 设置页严格对照桌面端（暗色主题、标题栏、搜索框、分组胶囊、3 列表情网格）
@@ -9,10 +11,11 @@
 - **缓存扫描** — 启动/手动刷新时扫描缓存目录，已有文件自动注册到数据库（文件名 + 哈希双重去重）
 - **缩略图** — 懒生成缩略图到 `thumbnails/{meme_id}_{size}.png`，网格加载
 - **本地数据库** — SQLite (WAL)，7 表 schema 与桌面端 `src/database.py` 完全一致（memes/tags/meme_tags/collections/meme_collections/favorites/recent_uses）
-- **搜索** — 关键词实时筛选（按文件名/原始名），分组/收藏夹/最近使用胶囊过滤（分组带数量，有子分组时追加 `▼`），与桌面端 `search_memes` 一致
+- **搜索** — 关键词实时筛选（按文件名/原始名），分组/收藏夹/最近使用/未分类胶囊过滤（分组带数量，有子分组时追加 `▼`），与桌面端 `search_memes` 一致
+- **「未分类」分组** — 顶栏胶囊显示未加入任何分组的表情（虚拟分组 `id == -4`，对齐桌面端 `webui.py`），仅在存在未分类表情时显示；可在设置页「显示『未分类』分组」开关控制，默认开
 - **小分组** — 顶栏分组胶囊长按新建小分组（仅 1 层，对齐桌面端 `create_subcollection`），子分组胶囊在父分组激活时平铺展开（对齐桌面端 webui 顶栏 `renderCollections`）；表情长按「加入小分组」可选目标子分组或新建，对齐桌面端网格右键
 - **分组管理** — 长按顶栏分组胶囊弹菜单：新建小分组 / 重命名分组 / 删除分组（成员移回上层，对齐桌面端 `rename_collection`/`delete_collection`），最近使用分组长按可清空最近使用（对齐桌面端 `clear_recent`）
-- **拖拽排序** — 标题栏「排序」开关进入排序模式，长按表情拖拽换位；全局视图落库 `reorderMemes`，分组视图内落库 `reorderCollectionMembers`，搜索中/收藏夹/最近使用禁用（对齐桌面端 `toggleDragSort`/`canReorderMemes`）
+- **拖拽排序** — 无标题栏排序开关；仅在搜索为空、全局视图或正数真实分组且网格至少有 2 张卡片时，卡片左上拖拽手柄才显示并可启动换位。点击卡片主体仍分享，长按卡片主体仍打开上下文菜单；搜索、收藏夹、最近使用和未分类视图隐藏手柄且不能重排。全局视图落库 `reorderMemes`，分组视图内落库 `reorderCollectionMembers`
 - **设置** — 动图开关、复制处理模式、云端同步（FTP/S3/R2/WebDAV）凭据、版本信息、危险操作；保存/恢复默认已接真实配置（密钥字段用 Android Keystore 加密存储）
 - **配置加密** — `config.json` 中的密钥字段（s3_secret_key 等）经 Android Keystore AES-GCM 加密后落盘
 - **版本更新检查** — 设置页「检查更新」查询 GitHub Releases（`OhMyMeme/OhMyMeme-Android`），发现新版本弹窗引导下载 APK；下载地址按桌面端镜像列表依次探测可用镜像（github.dpik.top / gh.dpik.top / gh-proxy.org / proxy.starsfire.top），失败回退 GitHub 直连
@@ -23,9 +26,9 @@
 - **接收分享导入** — 从任意应用（微信/QQ/浏览器等）分享图片到 OhMyMeme 即可直接导入（`ACTION_SEND`/`ACTION_SEND_MULTIPLE`）
 - **最近使用** — 点击表情卡片自动记入最近使用，最近使用分组实时刷新
 - **日志导出** — 设置页导出本次运行的 Debug 日志（logcat 按进程 PID 过滤）到用户选择的位置
-- **快捷同步** — 主界面标题栏上传/下载图标，一键同步到远端/从远端拉取
-- **局域网互联** — 设置页连接同一局域网内的电脑端 OhMyMeme（UDP 发现 + AES-GCM 加密会话）：扫描发现电脑、输入密钥配对、连接时发送设备信息待电脑端确认、从电脑拉取表情（逐文件校验文件名/大小/哈希/可解码）、把手机表情上传到电脑、配置双向同步（拉取/推送弹窗确认）、密钥同步（电脑端开启「允许密钥传输」后动态显示「拉取密钥/推送密钥」按钮，弹窗警告后同步），对齐桌面端 `lan.py` 协议
-- **存储位置** — 设置页可修改 localdata 目录（数据库/缓存/缩略图），可选择转移现有文件；配置文件 config.json 保持不变
+- **快捷同步** — 主界面标题栏「更多」菜单提供上传到远端 / 从远端下载，一键同步并保留既有进度与完成提示
+- **局域网互联** — 设置页连接同一局域网内的电脑端 OhMyMeme（UDP 发现 + AES-GCM 加密会话）：扫描发现电脑或 **IP:端口 直连**（跳过扫描直接连接）、输入密钥配对、连接时发送设备信息待电脑端确认、从电脑拉取表情（逐文件校验文件名/大小/哈希/可解码）、把手机表情上传到电脑、配置双向同步（拉取/推送弹窗确认）、密钥同步（电脑端开启「允许密钥传输」后动态显示「拉取密钥/推送密钥」按钮，弹窗警告后同步），对齐桌面端 `lan.py` 协议
+- **存储位置** — 设置页可修改数据位置（SAF 目录选择器），cache/thumbnails 转移至所选目录（经 content URI 读写，memes.db 保留在真实路径）；可选择转移现有文件；配置文件 config.json 保持不变
 
 ## 快速开始
 
@@ -84,7 +87,7 @@ GitHub Actions 两个工作流（参考桌面端 `.github/workflows`）：
 
 1. **启动** — 打开应用，首次运行会询问存储位置；标题栏为蓝色 "Meme" 字样，下方为搜索框
 2. **导入** — 点击标题栏「导入」按钮，从系统文件选择器选图片（支持多选），自动去重并加入网格
-3. **刷新** — 点击「刷新」重新扫描缓存目录，把已有文件注册进数据库
+3. **更多** — 点击标题栏「更多」菜单，可上传到远端、从远端下载，或选择「刷新」重新扫描缓存目录并注册已有文件
 4. **搜索** — 搜索栏输入关键词实时筛选，点击分组胶囊过滤
 5. **设置** — 点击⚙按钮进入设置页，修改后点「保存」持久化，「恢复默认」还原出厂配置
 
@@ -96,11 +99,11 @@ GitHub Actions 两个工作流（参考桌面端 `.github/workflows`）：
 |------|------|
 | 数据根目录 | `Android/data/com.ohmymeme.app/` |
 | 配置文件 | `Android/data/com.ohmymeme.app/config.json` |
-| 数据库 | `Android/data/com.ohmymeme.app/files/memes.db` |
-| 缓存原图 | `Android/data/com.ohmymeme.app/files/cache/` |
-| 缩略图 | `Android/data/com.ohmymeme.app/files/thumbnails/` |
+| 数据库 | `Android/data/com.ohmymeme.app/files/memes.db`（始终在真实路径） |
+| 缓存原图 | 默认 `files/cache/`；用户经 SAF 指定目录后位于所选目录的 `cache/` |
+| 缩略图 | 默认 `files/thumbnails/`；用户经 SAF 指定目录后位于所选目录的 `thumbnails/` |
 
-> 首次运行会弹出对话框选择存储位置：默认使用应用专属目录，localdata（数据库/缓存/缩略图）放在 `files/` 下；或通过系统目录选择器指定其他位置。存储结构对应桌面端：`config.json` ↔ `%APPDATA%/OhMyMeme/config.json`，`files/` ↔ `%LOCALAPPDATA%/OhMyMeme`（含 memes.db / cache / thumbnails），后续可扩展远程同步。
+> 首次运行会弹出对话框选择存储位置：默认使用应用专属目录，或通过系统目录选择器（SAF）指定其他位置。SAF 模式下 cache/thumbnails 经 content URI 读写（作用域存储下共享目录无法以原始文件路径写入），memes.db 始终留在应用可真实写入的 `files/` 目录；切换存储位置时可选择把现有 cache/thumbnails 转移到新目录。存储结构对应桌面端：`config.json` ↔ `%APPDATA%/OhMyMeme/config.json`，`files/` ↔ `%LOCALAPPDATA%/OhMyMeme`（含 memes.db / cache / thumbnails），后续可扩展远程同步。
 
 ## 架构
 
@@ -168,32 +171,6 @@ com.ohmymeme.app/
 | 加密 | Android Keystore (AES-GCM) | 硬件背书密钥 |
 | 导入 | Storage Access Framework | 免存储权限批量选图 |
 | 构建 | AGP 9.0 + Gradle 9.1 | 版本目录（libs.versions.toml）管理依赖 |
-
-## 状态
-
-- [x] 主界面 UI 复刻
-- [x] 设置页 UI 复刻
-- [x] 存储层（路径/数据库/配置）
-- [x] 缓存扫描 + 导入 + 缩略图
-- [x] 导入菜单：从文件导入 / 从手机相册导入（Photo Picker 免权限，不支持时回退相册）/ 从手机QQ缓存导入（占位）
-- [x] 设置保存/重置接真实配置
-- [x] 版本更新检查
-- [x] GIF 动图播放（含 WebP 动图，`auto_play_gif` 开关）
-- [x] 长按右键菜单（重命名/收藏/添加分组/加入小分组/从最近使用中删除/删除）
-- [x] 云端同步（FTP/S3/R2/WebDAV，含镜像源更新下载、清理云端孤儿）
-- [x] 最近使用记录（点击卡片记录 + 最近使用分组）
-- [x] 启动自动同步（sync_auto_sync / sync_auto_fetch_index）
-- [x] 日志导出
-- [x] 主界面快捷同步（上传/下载图标，多线程 + 进度条/完成弹窗/后台运行）
-- [x] 修改存储位置（localdata，可转移现有文件）
-- [x] 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，与桌面端 gif_stego.py 逐字节一致）
-- [x] 小分组（子分组）创建与嵌套胶囊展示（1 层限制，对齐桌面端 create_subcollection / renderCollections）
-- [x] 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
-- [x] 拖拽排序：标题栏「排序」开关 + 长按拖拽换位，全局 reorderMemes / 分组内 reorderCollectionMembers 落库
-- [x] 点击分享：点击卡片经 FileProvider 分享到微信/QQ 等（同时记最近使用），分享前按复制处理模式缩放为 WebP / 转 GIF / 转隐写 GIF
-- [x] 接收分享导入：其他应用分享图片到本应用直接导入（ACTION_SEND / SEND_MULTIPLE）
-- [x] 局域网互联：设置页连接电脑端（UDP 发现 / 密钥配对 / 设备确认 / 拉取 / 上传 / 配置双向同步 / 密钥同步）
-- [x] 复制处理：GifEncoder（median cut 256 色 + LZW）与 GifStego.encode（FULL/LZMA/WebP 候选）在设备端实现超限静态图转换/隐写写入
 
 ## 许可证
 

@@ -32,11 +32,21 @@ class MemeDb(context: Context) {
     }
 
     init {
-        db = SQLiteDatabase.openDatabase(
-            StoragePaths.dbPath(context).absolutePath,
-            null,
-            SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
-        )
+        db = try {
+            SQLiteDatabase.openDatabase(
+                StoragePaths.dbPath(context).absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
+            )
+        } catch (e: android.database.sqlite.SQLiteException) {
+            android.util.Log.w(TAG, "open DB failed, resetting dataDir to default: $e")
+            StoragePaths.resetDataDir(context)
+            SQLiteDatabase.openDatabase(
+                StoragePaths.dbPath(context).absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
+            )
+        }
         db.enableWriteAheadLogging()
         initSchema()
         android.util.Log.d(TAG, "opened ${db.path}")
@@ -337,6 +347,7 @@ class MemeDb(context: Context) {
         tags: List<String>? = null,
         collectionId: Long? = null,
         favoriteOnly: Boolean = false,
+        uncategorizedOnly: Boolean = false,
         offset: Int = 0,
         limit: Int = 100
     ): List<Meme> {
@@ -370,6 +381,10 @@ class MemeDb(context: Context) {
             where.add("m.id IN (SELECT meme_id FROM favorites)")
         }
 
+        if (uncategorizedOnly) {
+            where.add("NOT EXISTS (SELECT 1 FROM meme_collections mc WHERE mc.meme_id = m.id)")
+        }
+
         val orderBy: String
         if (collectionId != null) {
             orderBy = "ORDER BY (" +
@@ -390,7 +405,12 @@ class MemeDb(context: Context) {
         return result
     }
 
-    fun count(keyword: String = "", collectionId: Long? = null, favoriteOnly: Boolean = false): Int {
+    fun count(
+        keyword: String = "",
+        collectionId: Long? = null,
+        favoriteOnly: Boolean = false,
+        uncategorizedOnly: Boolean = false
+    ): Int {
         val where = mutableListOf("(stego_of_hash IS NULL OR stego_of_hash = '')")
         val params = mutableListOf<String>()
         if (keyword.isNotEmpty()) {
@@ -405,6 +425,9 @@ class MemeDb(context: Context) {
         }
         if (favoriteOnly) {
             where.add("id IN (SELECT meme_id FROM favorites)")
+        }
+        if (uncategorizedOnly) {
+            where.add("NOT EXISTS (SELECT 1 FROM meme_collections mc WHERE mc.meme_id = id)")
         }
         val sql = "SELECT COUNT(*) FROM memes WHERE " + where.joinToString(" AND ")
         db.rawQuery(sql, params.toTypedArray()).use {

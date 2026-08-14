@@ -108,9 +108,9 @@ object CloudSync {
                 .put("name", m.originalName.ifEmpty { m.filename.substringBeforeLast('.') })
                 .put("sha256", m.fileHash)
                 .put("file_size", m.fileSize)
-            val cacheFile = File(StoragePaths.cacheDir(ctx), m.filename)
-            if (cacheFile.exists()) {
-                entry.put("mtime", (cacheFile.lastModified() / 1000).toString())
+            val cacheFile = StoragePaths.cacheDir(ctx).child(m.filename)
+            if (cacheFile.exists) {
+                entry.put("mtime", (cacheFile.lastModified / 1000).toString())
             }
             memes.put(entry)
         }
@@ -1079,7 +1079,7 @@ object CloudSync {
 
         val entries = local.entries.toList()
         val filesTotal = entries.size
-        val bytesTotal = entries.sumOf { (fname, _) -> File(cacheDir, fname).length() }
+        val bytesTotal = entries.sumOf { (fname, _) -> cacheDir.child(fname).length }
         progress?.let {
             it.filesTotal = filesTotal
             it.bytesTotal = bytesTotal
@@ -1146,7 +1146,7 @@ object CloudSync {
         ctx: Context,
         chunk: List<Map.Entry<String, JSONObject>>,
         root: String,
-        cacheDir: File,
+        cacheDir: StorFile,
         remote: Map<String, JSONObject>,
         progress: SyncProgress?
     ): WorkerResult {
@@ -1161,7 +1161,7 @@ object CloudSync {
             val memeDir = root + "/" + REMOTE_MEME_DIR
             for ((fname, entry) in chunk) {
                 val remoteEntry = remote[fname]
-                val localFile = File(cacheDir, fname)
+                val localFile = cacheDir.child(fname)
                 if (remoteEntry != null &&
                     remoteEntry.optString("sha256", "") == entry.optString("sha256", "")
                 ) {
@@ -1171,16 +1171,25 @@ object CloudSync {
                         continue
                     }
                 }
-                if (!localFile.exists()) {
+                if (!localFile.exists) {
                     errors++
                     failed.add(fname)
                     progress?.report(0, fname)
                     continue
                 }
                 bk.ensureRemoteDir(memeDir)
-                if (bk.uploadFile(localFile, remoteMemePath(root, fname))) {
+                val tmp = File(ctx.cacheDir, "push_${System.nanoTime()}.tmp")
+                val ok = try {
+                    localFile.copyTo(tmp)
+                    bk.uploadFile(tmp, remoteMemePath(root, fname))
+                } catch (e: Exception) {
+                    false
+                } finally {
+                    tmp.delete()
+                }
+                if (ok) {
                     done++
-                    progress?.report(localFile.length(), fname)
+                    progress?.report(localFile.length, fname)
                 } else {
                     errors++
                     failed.add(fname)
@@ -1222,7 +1231,7 @@ object CloudSync {
         val filesTotal = entries.size
         val bytesTotal = entries.sumOf { (fname, rentry) ->
             if (local[fname]?.optString("sha256", "") == rentry.optString("sha256", "") &&
-                File(cacheDir, fname).exists()
+                cacheDir.child(fname).exists
             ) 0L else rentry.optLong("file_size", 0L)
         }
         progress?.let {
@@ -1257,8 +1266,8 @@ object CloudSync {
 
         val db = MemeDb.get(ctx)
         for (fname in remote.keys) {
-            val localFile = File(cacheDir, fname)
-            if (!localFile.exists() || localFile.length() == 0L) continue
+            val localFile = cacheDir.child(fname)
+            if (!localFile.exists || localFile.length == 0L) continue
             if (db.getByFilename(fname) != null) continue
             val rentry = remote[fname] ?: continue
             val dims = readDimensions(localFile)
@@ -1268,7 +1277,7 @@ object CloudSync {
                 fileHash = rentry.optString("sha256", ""),
                 width = dims.first,
                 height = dims.second,
-                fileSize = localFile.length(),
+                fileSize = localFile.length,
                 mimeType = "image/${fname.substringAfterLast('.', "png").lowercase()}",
                 originalName = oname
             )
@@ -1280,13 +1289,13 @@ object CloudSync {
                 if (fname in remote) continue
                 val row = db.getByFilename(fname)
                 if (row != null) {
-                    thumbs.listFiles()?.forEach { t ->
+                    thumbs.listFiles().forEach { t ->
                         if (t.name.startsWith("${row.id}_")) t.delete()
                     }
                     db.deleteMeme(row.id)
                 }
-                val f = File(cacheDir, fname)
-                if (f.exists() && f.delete()) removed++
+                val f = cacheDir.child(fname)
+                if (f.exists && f.delete()) removed++
             }
             applyRemoteOrder(ctx, data)
             return SyncResult(
@@ -1307,7 +1316,7 @@ object CloudSync {
         ctx: Context,
         chunk: List<Map.Entry<String, JSONObject>>,
         root: String,
-        cacheDir: File,
+        cacheDir: StorFile,
         local: Map<String, JSONObject>,
         progress: SyncProgress?
     ): WorkerResult {
@@ -1319,29 +1328,36 @@ object CloudSync {
         try {
             bk.connect()
             for ((fname, rentry) in chunk) {
-                val localFile = File(cacheDir, fname)
+                val localFile = cacheDir.child(fname)
                 if (local[fname]?.optString("sha256", "") == rentry.optString("sha256", "") &&
-                    localFile.exists()
+                    localFile.exists
                 ) {
                     done++
                     progress?.report(0, fname)
                     continue
                 }
-                if (bk.downloadFile(remoteMemePath(root, fname), localFile)) {
-                    if (localFile.length() == 0L) {
-                        errors++
-                        failed.add(fname)
-                        localFile.delete()
-                        progress?.report(0, fname)
-                        continue
-                    }
+                val tmp = File(ctx.cacheDir, "pull_${System.nanoTime()}.tmp")
+                val ok = try {
+                    bk.downloadFile(remoteMemePath(root, fname), tmp)
+                } catch (e: Exception) {
+                    false
+                }
+                if (ok && tmp.length() == 0L) {
+                    errors++
+                    failed.add(fname)
+                    progress?.report(0, fname)
+                } else if (ok) {
+                    val mime = "image/${fname.substringAfterLast('.', "png").lowercase()}"
+                    val dst = cacheDir.createFile(fname, mime)
+                    dst.writeFrom(tmp)
                     done++
-                    progress?.report(localFile.length(), fname)
+                    progress?.report(tmp.length(), fname)
                 } else {
                     errors++
                     failed.add(fname)
                     progress?.report(0, fname)
                 }
+                tmp.delete()
             }
         } catch (e: Exception) {
             android.util.Log.e(TAG, "pull worker failed: $e")
@@ -1421,9 +1437,9 @@ object CloudSync {
         val thumbs = StoragePaths.thumbnailDir(ctx)
         var count = 0
         for (m in memes) {
-            val f = File(cache, m.filename)
-            if (f.exists() && f.delete()) count++
-            thumbs.listFiles()?.forEach { t ->
+            val f = cache.child(m.filename)
+            if (f.exists && f.delete()) count++
+            thumbs.listFiles().forEach { t ->
                 if (t.name.startsWith("${m.id}_")) t.delete()
             }
         }
@@ -1496,11 +1512,11 @@ object CloudSync {
             "/" !in name && "\\" !in name
     }
 
-    private fun readDimensions(file: File): Pair<Int, Int> {
+    private fun readDimensions(stor: StorFile): Pair<Int, Int> {
         return try {
             val opts = BitmapFactory.Options()
             opts.inJustDecodeBounds = true
-            BitmapFactory.decodeFile(file.absolutePath, opts)
+            stor.openInputStream().use { BitmapFactory.decodeStream(it, null, opts) }
             opts.outWidth to opts.outHeight
         } catch (e: Exception) {
             0 to 0

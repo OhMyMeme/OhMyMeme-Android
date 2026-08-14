@@ -1,3 +1,25 @@
+# v0.4.5 — 「未分类」分组 + 局域网直连 + 存储位置 SAF 全量支持
+
+## 新增
+
+- **「未分类」虚拟分组（`id == -4`）** — 顶栏分组胶囊新增「未分类」，列出未加入任何分组的表情，对齐桌面端 `webui.py`（`search_memes` 的 `collection_id == -4` + `get_collections` 系统分组）；只在 `count(uncategorized_only=True) > 0` 时显示，清零后自动隐藏并退出该视图，行为与收藏夹/最近使用一致
+- **查询支持** — `MemeDb.search`/`count` 新增 `uncategorizedOnly` 参数，对应桌面端 `database.py` 的 `uncategorized_only`（`NOT EXISTS (SELECT 1 FROM meme_collections mc WHERE mc.meme_id = m.id)`）
+- **设置开关** — 设置页新增「分组」区块 + 「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py` 默认 + `settings.html` 勾选框）
+- 虚拟分组不落库，`CloudSync` 清单（仅遍历真实 `collections` 表）天然不受影响；负数 id 使拖拽排序/长按分组菜单自动禁用，与收藏夹/最近使用一致
+- **局域网互联 IP:端口 直连** — 设置页「局域网互联」区块新增 IP:端口 输入框与「直连」按钮，填写电脑 IP 与端口（如 `192.168.1.100:17852`）即可跳过 UDP 扫描直接建立加密会话；协议与扫描连接完全一致（复用 `LanClient.connect`，TCP 握手 + 设备确认 + AES-GCM），连接状态显示「已连接 IP（直连）」，适用于同一局域网内扫描不到的电脑（如手动指定端口/跨网段路由可达）
+
+## 修复
+
+- **修改存储位置后重启闪退 / 所选位置提示无法写入** — 根因：作用域存储（targetSdk 36）下 `ACTION_OPEN_DOCUMENT_TREE` 只授予 content URI 权限，旧实现把 SAF 树解析成原始共享路径（如 `/storage/emulated/0/Download/...`）并持久化，导致 `memes.db` 打不开崩溃、目录被误判不可写。改为 **SAF 全量支持**：`cache`/`thumbnails` 经 content URI（DocumentFile）读写，`memes.db` 始终留在应用可真实写入的 `files/` 目录
+- **`StorFile`（新文件）** — 统一文件句柄，真实路径 / SAF content URI 双模式（`child`/`childOrCreateDir`/`createFile`/`listFiles`/`listFilesRecursive`/`sibling`/流读写/`delete`/`copyTo(File)`/`copyFrom`/`writeFrom(File)`），`cache`/`thumbnails` 的所有读写经其抽象
+- **`StoragePaths` 改造** — 新增 `KEY_DATA_TREE` 持久化 SAF 树 URI、`persistDataTree`（`takePersistableUriPermission` + 探针校验，失败即拒绝）、`dataRoot/cacheDir/thumbnailDir` 返回 `StorFile`、`describeDataLocation`（树 URI 解析为真实路径仅作展示，失败显示 URI）；`resetDataDir` 同时清理真实路径与树 URI 并释放持久化权限
+- **消费方迁移** — `MemeImporter`（`createFile`+`writeBytes`）、`CacheScanner`（`listFilesRecursive`）、`Thumbnailer`（`findMemeFile`→`StorFile?`、`getThumbBitmap`）、`MemeGridAdapter`（动图经 `ImageDecoder.createSource(contentResolver, uri)` 解码）、`MemeCopyProcessor`（入参改 `StorFile`）、`LanClient.push`（`stor.readBytes()`）、`CloudSync`（Backend 仍只接受真实 `File`：push 上传前 `copyTo` 物化到 `context.cacheDir` 临时文件，pull 下载到临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除）、`MainActivity`（分享/删除物理文件/首次运行选树改存 tree URI）
+- **设置页** — `onStorageDirPicked` 先 `persistDataTree` 校验再询问是否转移；`moveDataToTree` 用 `StorFile` 只拷贝 `cache`/`thumbnails` 两个子目录（绝不拷贝 `memes.db`）到新树，成功后删除源子树
+
+## 其他
+
+- **版本号** — versionCode 9 / versionName 0.4.5
+
 # v0.4.4 — 复制处理落地（WebP 缩放 / GIF 转换 / 隐写 GIF 编码）
 
 ## 新增

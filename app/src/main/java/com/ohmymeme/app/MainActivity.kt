@@ -11,7 +11,6 @@ import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -45,11 +44,12 @@ class MainActivity : AppCompatActivity() {
     private val syncExecutor = Executors.newSingleThreadExecutor()
     private var currentKeyword = ""
     private var activeCollectionId: Long? = null
-    private var sortEnabled = false
+    private var latestReloadId = 0L
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
         private const val COLLECTION_RECENT = -3L
+        private const val COLLECTION_UNCATEGORIZED = -4L
     }
 
     private val importLauncher =
@@ -159,13 +159,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupTitleButtons() {
         findViewById<TextView>(R.id.btn_import).setOnClickListener { showImportMenu(it) }
-        findViewById<View>(R.id.btn_refresh).setOnClickListener { rescanCache() }
-        findViewById<View>(R.id.btn_sort).setOnClickListener { toggleSort() }
+        findViewById<View>(R.id.btn_more).setOnClickListener { showMoreActionsMenu(it) }
         findViewById<View>(R.id.btn_settings).setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
-        findViewById<View>(R.id.btn_upload).setOnClickListener { quickSync(isUpload = true) }
-        findViewById<View>(R.id.btn_download).setOnClickListener { quickSync(isUpload = false) }
     }
 
     private fun quickSync(isUpload: Boolean) {
@@ -322,6 +319,18 @@ class MainActivity : AppCompatActivity() {
         val recentCount = db.getRecent(10000).size
         if (recentCount > 0) {
             display.add(CollectionEntry(COLLECTION_RECENT, getString(R.string.collection_recent), recentCount))
+        }
+        if (ConfigStore.get(this).optBoolean("show_uncategorized", true)) {
+            val uncategorizedCount = db.count(uncategorizedOnly = true)
+            if (uncategorizedCount > 0) {
+                display.add(
+                    CollectionEntry(
+                        COLLECTION_UNCATEGORIZED,
+                        getString(R.string.collection_uncategorized),
+                        uncategorizedCount
+                    )
+                )
+            }
         }
         fun flatten(items: List<CollectionNode>, parentActive: Boolean) {
             items.forEach { node ->
@@ -571,45 +580,52 @@ class MainActivity : AppCompatActivity() {
 
     private fun reloadData() {
         reloadBars()
+        val keyword = currentKeyword
+        val collectionId = activeCollectionId
+        latestReloadId += 1
+        val reloadId = latestReloadId
         executor.execute {
             val db = MemeDb.get(this)
             val memes = when {
-                activeCollectionId == COLLECTION_FAVORITES -> db.search(
-                    keyword = currentKeyword,
+                collectionId == COLLECTION_FAVORITES -> db.search(
+                    keyword = keyword,
                     favoriteOnly = true,
                     offset = 0,
                     limit = 10000
                 )
-                activeCollectionId == COLLECTION_RECENT -> db.getRecent(10000)
-                currentKeyword.isEmpty() && activeCollectionId == null ->
+                collectionId == COLLECTION_RECENT -> db.getRecent(10000)
+                collectionId == COLLECTION_UNCATEGORIZED -> db.search(
+                    keyword = keyword,
+                    uncategorizedOnly = true,
+                    offset = 0,
+                    limit = 10000
+                )
+                keyword.isEmpty() && collectionId == null ->
                     db.getAll(limit = 10000)
                 else -> db.search(
-                    keyword = currentKeyword,
-                    collectionId = activeCollectionId,
+                    keyword = keyword,
+                    collectionId = collectionId,
                     offset = 0,
                     limit = 10000
                 )
             }
-            android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$currentKeyword'")
+            android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$keyword'")
             runOnUiThread {
+                if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
                     rv.layoutManager = GridLayoutManager(this, 3)
-                    val sortable = sortEnabled && currentKeyword.isEmpty() &&
-                        (activeCollectionId == null || activeCollectionId!! > 0)
-                    val adapter = MemeGridAdapter(this, memes).apply {
+                    (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
+                    rv.setTag(R.id.tag_sort_helper, null)
+                    val canOrder = canOrderCards(keyword, collectionId, memes.size)
+                    val adapter = MemeGridAdapter(this, memes, canOrder).apply {
                         onItemClick = { _, meme -> onMemeClick(meme) }
-                        onLongClick = if (sortable) null
-                        else { anchor, meme -> showMemeMenu(anchor, meme) }
+                        onLongClick = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                     rv.adapter = adapter
-                    if (sortable) {
-                        rv.setTag(R.id.tag_sort_helper, ItemTouchHelper(SortCallback(adapter)).apply {
-                            attachToRecyclerView(rv)
-                        })
-                    } else {
-                        (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
-                        rv.setTag(R.id.tag_sort_helper, null)
-                    }
+                    val helper = ItemTouchHelper(SortCallback(adapter, collectionId))
+                    adapter.onDragStart = { holder -> helper.startDrag(holder) }
+                    helper.attachToRecyclerView(rv)
+                    rv.setTag(R.id.tag_sort_helper, helper)
                 }
                 findViewById<View>(R.id.empty_state).visibility =
                     if (memes.isEmpty()) View.VISIBLE else View.GONE
@@ -746,7 +762,7 @@ class MainActivity : AppCompatActivity() {
                 val shareFile = if (processed != null) {
                     processed.file
                 } else {
-                    File(cache, "share_${meme.id}_${file.name}").also { file.copyTo(it, overwrite = true) }
+                    File(cache, "share_${meme.id}_${file.name}").also { file.copyTo(it) }
                 }
                 val mime = processed?.mimeType ?: meme.mimeType.ifEmpty { "image/*" }
                 val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
@@ -812,10 +828,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun deleteMemeFiles(meme: Meme) {
-        Thumbnailer.findMemeFile(this, meme.filename)?.let { it.delete() }
+        Thumbnailer.findMemeFile(this, meme.filename)?.delete()
         StoragePaths.thumbnailDir(this).listFiles()
-            ?.filter { it.name.startsWith("${meme.id}_") }
-            ?.forEach { it.delete() }
+            .filter { it.name.startsWith("${meme.id}_") }
+            .forEach { it.delete() }
     }
 
     private fun pickImages() {
@@ -835,6 +851,20 @@ class MainActivity : AppCompatActivity() {
                 R.id.act_import_files -> pickImages()
                 R.id.act_import_album -> pickAlbumImages()
                 R.id.act_import_qq -> toast(getString(R.string.import_qq_pending))
+            }
+            true
+        }
+        popup.show()
+    }
+
+    private fun showMoreActionsMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menuInflater.inflate(R.menu.menu_more_actions, popup.menu)
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.act_sync_push -> quickSync(isUpload = true)
+                R.id.act_sync_pull -> quickSync(isUpload = false)
+                R.id.act_refresh -> rescanCache()
             }
             true
         }
@@ -892,11 +922,10 @@ class MainActivity : AppCompatActivity() {
     private fun handlePickDirResult(resultCode: Int, data: Intent?) {
         val uri = data?.data
         if (resultCode == RESULT_OK && uri != null) {
-            val path = StoragePaths.resolveTreeUriPath(this, uri)
-            if (path != null) {
-                StoragePaths.setDataDir(this, path)
+            if (StoragePaths.persistDataTree(this, uri)) {
+                StoragePaths.setDataTree(this, uri)
             } else {
-                toast(getString(R.string.storage_pick_failed))
+                toast(getString(R.string.storage_pick_not_writable))
             }
         }
         StoragePaths.markSetupDone(this)
@@ -908,19 +937,10 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
-    private fun toggleSort() {
-        sortEnabled = !sortEnabled
-        findViewById<ImageView>(R.id.btn_sort).setImageTintList(
-            android.content.res.ColorStateList.valueOf(
-                getColor(if (sortEnabled) R.color.accent else R.color.muted)
-            )
-        )
-        toast(getString(if (sortEnabled) R.string.sort_on else R.string.sort_off))
-        reloadData()
-    }
-
-    private inner class SortCallback(private val adapter: MemeGridAdapter) :
-        ItemTouchHelper.Callback() {
+    private inner class SortCallback(
+        private val adapter: MemeGridAdapter,
+        private val collectionId: Long?
+    ) : ItemTouchHelper.Callback() {
 
         override fun getMovementFlags(
             recyclerView: RecyclerView,
@@ -942,18 +962,17 @@ class MainActivity : AppCompatActivity() {
 
         override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
 
-        override fun isLongPressDragEnabled() = true
+        override fun isLongPressDragEnabled() = false
 
         override fun clearView(
             recyclerView: RecyclerView,
             viewHolder: RecyclerView.ViewHolder
         ) {
             super.clearView(recyclerView, viewHolder)
+            val ids = adapter.currentIds()
             executor.execute {
-                val ids = adapter.currentIds()
-                val cid = activeCollectionId
-                if (cid != null && cid > 0) {
-                    MemeDb.get(this@MainActivity).reorderCollectionMembers(cid, ids)
+                if (collectionId != null && collectionId > 0) {
+                    MemeDb.get(this@MainActivity).reorderCollectionMembers(collectionId, ids)
                 } else {
                     MemeDb.get(this@MainActivity).reorderMemes(ids)
                 }

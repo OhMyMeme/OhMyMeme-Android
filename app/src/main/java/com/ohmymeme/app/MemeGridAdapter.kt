@@ -1,23 +1,23 @@
 package com.ohmymeme.app
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
+import android.view.MotionEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MemeGridAdapter(
     private val context: Context,
-    items: List<Meme>
+    items: List<Meme>,
+    private val canOrder: Boolean
 ) : RecyclerView.Adapter<MemeGridAdapter.MemeViewHolder>() {
 
     private val items: MutableList<Meme> = items.toMutableList()
@@ -25,6 +25,7 @@ class MemeGridAdapter(
 
     var onItemClick: ((View, Meme) -> Unit)? = null
     var onLongClick: ((View, Meme) -> Unit)? = null
+    var onDragStart: ((MemeViewHolder) -> Unit)? = null
 
     fun move(from: Int, to: Int) {
         if (from == to) return
@@ -47,6 +48,7 @@ class MemeGridAdapter(
         val img = holder.itemView.findViewById<ImageView>(R.id.img_meme)
         val name = holder.itemView.findViewById<TextView>(R.id.tv_meme_name)
         val badge = holder.itemView.findViewById<TextView>(R.id.tv_meme_badge)
+        val dragHandle = holder.itemView.findViewById<ImageView>(R.id.btn_drag_handle)
         (img.drawable as? AnimatedImageDrawable)?.stop()
         img.setImageResource(R.drawable.ic_photo)
         img.setColorFilter(context.getColor(R.color.muted))
@@ -58,6 +60,18 @@ class MemeGridAdapter(
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(it, meme)
             true
+        }
+        dragHandle.visibility = if (canOrder) View.VISIBLE else View.GONE
+        dragHandle.setOnTouchListener(null)
+        if (canOrder) {
+            dragHandle.setOnTouchListener { _, event ->
+                if (event.action != MotionEvent.ACTION_DOWN) return@setOnTouchListener true
+                if (holder.bindingAdapterPosition == RecyclerView.NO_POSITION) {
+                    return@setOnTouchListener false
+                }
+                onDragStart?.invoke(holder)
+                true
+            }
         }
         executor.execute {
             val animated = isAnimatedFile(meme)
@@ -84,8 +98,8 @@ class MemeGridAdapter(
     private fun isAnimatedFile(meme: Meme): Boolean {
         if (meme.mimeType.endsWith("gif") || meme.filename.lowercase().endsWith(".gif")) return true
         if (meme.filename.lowercase().endsWith(".webp")) {
-            val f = File(StoragePaths.cacheDir(context), meme.filename)
-            if (!f.exists()) return false
+            val f = StoragePaths.cacheDir(context).child(meme.filename)
+            if (!f.exists) return false
             return FileUtils.isAnimatedFile(f)
         }
         return false
@@ -109,9 +123,14 @@ class MemeGridAdapter(
         }
     }
 
-    private fun decodeAnimated(file: File): Drawable? {
+    private fun decodeAnimated(stor: StorFile): Drawable? {
         return try {
-            val source = ImageDecoder.createSource(file)
+            val uri = stor.uri
+            val source = if (uri != null) {
+                ImageDecoder.createSource(context.contentResolver, uri)
+            } else {
+                ImageDecoder.createSource(stor.realFile!!)
+            }
             ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
                 decoder.setTargetSampleSize(sampleSize(info.size.width, info.size.height, 300))
             }
@@ -121,16 +140,13 @@ class MemeGridAdapter(
     }
 
     private fun loadThumb(img: ImageView, meme: Meme) {
-        val path = Thumbnailer.getThumbPath(context, meme.id, meme.filename)
-        if (path != null && img.tag == meme.id) {
-            val bitmap = BitmapFactory.decodeFile(path)
-            if (bitmap != null && img.tag == meme.id) {
-                img.post {
-                    if (img.tag == meme.id) {
-                        img.setColorFilter(null)
-                        img.setImageTintList(null)
-                        img.setImageBitmap(bitmap)
-                    }
+        val bitmap = Thumbnailer.getThumbBitmap(context, meme.id, meme.filename)
+        if (bitmap != null && img.tag == meme.id) {
+            img.post {
+                if (img.tag == meme.id) {
+                    img.setColorFilter(null)
+                    img.setImageTintList(null)
+                    img.setImageBitmap(bitmap)
                 }
             }
         }

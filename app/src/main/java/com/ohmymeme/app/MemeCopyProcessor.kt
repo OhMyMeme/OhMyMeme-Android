@@ -20,30 +20,30 @@ object MemeCopyProcessor {
 
     class Result(val file: File, val mimeType: String)
 
-    fun process(context: Context, file: File): Result? {
+    fun process(context: Context, stor: StorFile): Result? {
         val cfg = ConfigStore.get(context)
         val mode = cfg.optInt("copy_resize_mode", 1)
         if (mode == 0) return null
-        if (FileUtils.isAnimatedFile(file)) return null
+        if (FileUtils.isAnimatedFile(stor)) return null
         val bounds = BitmapFactory.Options()
         bounds.inJustDecodeBounds = true
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        stor.openInputStream().use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         val maxSide = cfg.optInt("copy_resize_max", 200)
         if (maxOf(bounds.outWidth, bounds.outHeight) <= maxSide) return null
         return when (mode) {
-            1 -> toWebp(context, file, bounds.outWidth, bounds.outHeight, maxSide)
-            2 -> toGif(context, file, bounds.outWidth, bounds.outHeight)
-            3 -> toStegoGif(context, file, bounds.outWidth, bounds.outHeight)
+            1 -> toWebp(context, stor, bounds.outWidth, bounds.outHeight, maxSide)
+            2 -> toGif(context, stor, bounds.outWidth, bounds.outHeight)
+            3 -> toStegoGif(context, stor, bounds.outWidth, bounds.outHeight)
             else -> null
         }
     }
 
-    private fun toWebp(context: Context, file: File, w: Int, h: Int, maxSide: Int): Result? {
+    private fun toWebp(context: Context, stor: StorFile, w: Int, h: Int, maxSide: Int): Result? {
         return try {
             var sample = 1
             while (w / sample > maxSide * 4 || h / sample > maxSide * 4) sample *= 2
-            val src = decode(file, sample) ?: return null
+            val src = decode(stor, sample) ?: return null
             val ratio = maxSide / maxOf(src.width, src.height).toFloat()
             val nw = maxOf(1, (src.width * ratio).toInt())
             val nh = maxOf(1, (src.height * ratio).toInt())
@@ -59,9 +59,9 @@ object MemeCopyProcessor {
         }
     }
 
-    private fun toGif(context: Context, file: File, w: Int, h: Int): Result? {
+    private fun toGif(context: Context, stor: StorFile, w: Int, h: Int): Result? {
         return try {
-            val bmp = decodeFull(file) ?: return null
+            val bmp = decodeFull(stor) ?: return null
             val rgba = bitmapToRgba(bmp)
             bmp.recycle()
             val gif = GifEncoder.encode(rgba, w, h)
@@ -74,9 +74,9 @@ object MemeCopyProcessor {
         }
     }
 
-    private fun toStegoGif(context: Context, file: File, w: Int, h: Int): Result? {
+    private fun toStegoGif(context: Context, stor: StorFile, w: Int, h: Int): Result? {
         return try {
-            val bmp = decodeFull(file) ?: return null
+            val bmp = decodeFull(stor) ?: return null
             val rgba = bitmapToRgba(bmp)
             val hasAlpha = bmp.hasAlpha()
             bmp.recycle()
@@ -113,8 +113,8 @@ object MemeCopyProcessor {
             }
             val baseGif = GifEncoder.encode(rgba, w, h)
             val stego = GifStego.encode(
-                baseGif, file.readBytes(), file.extension, origPixels, kind, w, h,
-                ::encodeLosslessWebp
+                baseGif, stor.readBytes(), stor.name.substringAfterLast('.', ""),
+                origPixels, kind, w, h, ::encodeLosslessWebp
             )
             val out = File(context.cacheDir, "copy_${System.nanoTime()}.gif")
             out.writeBytes(stego)
@@ -149,20 +149,20 @@ object MemeCopyProcessor {
         }
     }
 
-    private fun decode(file: File, sample: Int): Bitmap? {
+    private fun decode(stor: StorFile, sample: Int): Bitmap? {
         val opts = BitmapFactory.Options()
         opts.inSampleSize = sample
         opts.inPreferredConfig = Bitmap.Config.ARGB_8888
-        return BitmapFactory.decodeFile(file.absolutePath, opts)
+        return stor.openInputStream().use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
-    private fun decodeFull(file: File): Bitmap? {
+    private fun decodeFull(stor: StorFile): Bitmap? {
         val bounds = BitmapFactory.Options()
         bounds.inJustDecodeBounds = true
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        stor.openInputStream().use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         if (bounds.outWidth.toLong() * bounds.outHeight > 32_000_000L) return null
-        return decode(file, 1)
+        return decode(stor, 1)
     }
 
     /** ARGB_8888 → 未预乘 RGBA 字节（反预乘，还原文件真实 RGB，对齐 Pillow） */

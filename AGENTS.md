@@ -1,7 +1,7 @@
 # OhMyMeme Android — AI Agent Guide
 
 ## 项目概述
-桌面端表情包管理系统（OhMyMeme）的安卓移植版。存储结构、数据库 schema、导入/扫描/缩略图命名规则与桌面端 `D:\code\OhMyMeme` 完全一致，便于多端同步。
+桌面端表情包管理系统（OhMyMeme）的安卓版。存储结构、数据库 schema、导入/扫描/缩略图命名规则与桌面端 `https://github.com/OhMyMeme/OhMyMeme` 完全一致，便于多端同步。
 
 ## 架构
 ```
@@ -23,7 +23,7 @@ ConfigStore + CryptoUtil ──► config.json（密钥 AES-GCM 加密）
 - minSdk 28 / targetSdk 36 / compileSdk 36
 
 ## 核心原则
-- **不重构桌面端** — 桌面端 `D:\code\OhMyMeme` 仅做最小必要修改；如需同步桌面端数据层逻辑，以 `database.py`/`config.py`/`webui.py` 为唯一事实来源
+- **不重构桌面端** — 桌面端 `若用户提供了桌面端本地源码位置` 仅做最小必要修改；如需同步桌面端数据层逻辑，以 `database.py`/`config.py`/`webui.py` 为唯一事实来源
 - **存储结构对齐桌面端** — 表 schema、列名、重命名规则、缩略图命名、去重逻辑逐条对照，不得随意改动
 - **增改同步** — 新功能/新文件必须同步更新 `README.md` 和 `AGENTS.md`
 - **无 emoji**（除非用户要求）
@@ -41,7 +41,8 @@ app/src/main/
     MemeDb.kt           # SQLite 封装（7 表 + 索引 + 列迁移）
     ConfigStore.kt      # JSON 配置（DEFAULTS 与桌面端 config.py 一致）
     CryptoUtil.kt       # Android Keystore AES-GCM 加解密
-    StoragePaths.kt     # 路径解析（base/data/cache/thumbnails/db/config）
+    StoragePaths.kt     # 路径解析（base/data/cache/thumbnails/db/config + SAF 树持久化）
+    StorFile.kt         # 统一文件句柄：SAF content URI / 真实路径 双模式读写 cache/thumbnails
     FileUtils.kt        # SHA-256 + 魔数识别扩展名
     CacheScanner.kt     # 缓存扫描（双重去重）
     MemeImporter.kt     # SAF 批量导入
@@ -66,10 +67,15 @@ app/src/main/
 Android/data/com.ohmymeme.app/
 ├── config.json                       ← 桌面端 %APPDATA%/OhMyMeme/config.json
 └── files/                            ← localdata（对应桌面端 %LOCALAPPDATA%/OhMyMeme）
-    ├── memes.db
-    ├── cache/                        ← 导入原图，命名 {sha256前16位}{ext}
-    └── thumbnails/                   ← {meme_id}_{size}.png（默认 150）
+    ├── memes.db                      ← 始终在真实路径，不随 SAF 存储位置迁移
+    ├── cache/                        ← 导入原图，命名 {sha256前16位}{ext}（默认位置）
+    └── thumbnails/                   ← {meme_id}_{size}.png（默认位置）
 ```
+- 用户可在首次运行或设置页经 SAF（`ACTION_OPEN_DOCUMENT_TREE`）选择数据位置：
+  - 选中后 `StoragePaths.persistDataTree` 取持久化读写权限并写入探针校验
+  - `cache/` 与 `thumbnails/` 通过 `StorFile` 抽象读写（content URI / 真实路径双模式），共享目录在作用域存储下只能走 content URI
+  - `memes.db` 与云端临时清单始终放在 `dataDir()`（真实路径，`KEY_DATA_DIR`），SAF 只存 `KEY_DATA_TREE`，切换时不清除 `KEY_DATA_DIR`
+  - 转移数据只拷贝 `cache`/`thumbnails` 两个子目录（绝不拷贝 memes.db），成功后删除源子树
 
 ## 关键实现细节
 
@@ -86,10 +92,11 @@ Android/data/com.ohmymeme.app/
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
 
-### 首次运行存储位置（MainActivity.kt）
+### 首次运行存储位置 / 修改存储位置
 - `StoragePaths.isFirstRun` 检测（SharedPreferences 标记 `setup_done`），首次启动弹窗二选一：默认位置（应用专属外部目录）或「选择其他位置」（SAF `ACTION_OPEN_DOCUMENT_TREE`）
-- `StoragePaths.resolveTreeUriPath` 把 SAF 树 URI 解析为真实路径（`primary:`→外部存储根，`home:`→Downloads），解析失败回退默认并提示；`setDataDir` 覆盖 localdata 目录
+- 选中后 `StoragePaths.persistDataTree`（`takePersistableUriPermission` + 探针校验，失败即拒绝）→ `setDataTree` 持久化 `KEY_DATA_TREE`；`describeDataLocation` 用 `resolveTreeUriPath` 把树 URI 解析为真实路径仅作展示（`primary:`→外部存储根，`home:`→Downloads），解析失败显示 URI
 - 选完位置后 `markSetupDone` + `ConfigStore.invalidate` 再加载数据
+- 设置页修改位置：`onStorageDirPicked` 同样先 `persistDataTree`，弹窗询问是否转移，`moveDataToTree` 用 `StorFile` 只拷贝 `cache`/`thumbnails` 两个子目录（绝不拷贝 memes.db），成功后删除源子树并 `applyStorageTree`
 
 ### 导入（MemeImporter.kt）
 - 点击标题栏「导入」弹 `menu_import.xml` 菜单：从文件导入（`pickImages`，SAF `ACTION_OPEN_DOCUMENT` 多选）/ 从手机相册导入（`pickAlbumImages`：`isPhotoPickerAvailable` 为真走 Photo Picker `PickMultipleVisualMedia`，否则回退 `ACTION_GET_CONTENT` 相册，避免库默认回退文件选择器）/ 从手机QQ缓存导入（占位 Toast「开发中，后续用 Shizuku 获取文件」）
@@ -106,8 +113,8 @@ Android/data/com.ohmymeme.app/
 
 ### 缩略图（Thumbnailer.kt）
 - 命名 `{meme_id}_{size}.png`，存在即复用（与桌面端一致）
-- `findMemeFile` 先查缓存根目录，再递归遍历（对应桌面端 `_find_meme_file`）
-- BitmapFactory `inSampleSize` 先按 2×size 降采样，再 createScaledBitmap 到 150×150，保存 PNG
+- `findMemeFile` 先查缓存根目录，再递归遍历，返回 `StorFile`（对应桌面端 `_find_meme_file`）
+- `getThumbBitmap(context, memeId, filename, size)` 读现有缩略图或生成：BitmapFactory `inSampleSize` 先按 2×size 降采样，再 createScaledBitmap 到 150×150，保存 PNG；缓存/缩略图均经 `StorFile` 读写（SAF content URI 或真实路径）
 
 ### 网格加载（MemeGridAdapter.kt）
 - 单线程 Executor 后台生成/解码缩略图，`img.tag = meme.id` 防列表复用错位
@@ -115,7 +122,7 @@ Android/data/com.ohmymeme.app/
 - 名称取 `original_name`，为空回退文件名去扩展名
 - **动图渲染**（对应桌面端 webui `m.is_animated && m.auto_play_gif`）：后台判 `isAnimatedFile`（`FileUtils.isAnimatedFile`：GIF89a 头或 RIFF+WEBP+ANIM；webp 直查 cache 根避免全目录遍历），且 `ConfigStore` 的 `auto_play_gif` 为 true 时用 `ImageDecoder` + `AnimatedImageDrawable`（`setTargetSampleSize` 目标 300）播放原图，否则用静态缩略图；动画解码失败回退缩略图
 - 右上角 badge：GIF / WebP（动图）/ 隐写导入（`fromStego==1`），`bg_badge.xml` 蓝底圆角
-- 长按回调 `onLongClick` 属性，由 MainActivity 弹 PopupMenu
+- 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
 ### 长按右键菜单（MainActivity.kt）
 - `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
@@ -125,7 +132,7 @@ Android/data/com.ohmymeme.app/
 ### 分组胶囊过滤（MainActivity.kt）
 - 点击 `rv_collections` 胶囊过滤表情：分组单选切换（`activeCollectionId`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
-- 分组栏含系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`），与桌面端 `get_collections` 一致
+- 分组栏含系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致
 
 ### 小分组（子分组）
@@ -143,9 +150,9 @@ Android/data/com.ohmymeme.app/
 - 取消收藏/移出最近使用后，若对应系统分组（收藏夹/最近使用）计数归零，自动退出该视图
 
 ### 拖拽排序（MainActivity.kt）
-- 标题栏「排序」按钮（`btn_sort`）开关 `sortEnabled`，开启后高亮 accent 色并 Toast 提示
-- 对齐桌面端 `toggleDragSort`/`canReorderMemes`：仅当 `sortEnabled && 关键词为空 && (activeCollectionId == null || > 0)` 时可排序（搜索中/收藏夹/最近使用禁用）
-- 可排序时用 `ItemTouchHelper`（`SortCallback`，`isLongPressDragEnabled`）支持长按拖拽换位，此时禁 `onLongClick` 右键菜单（手势冲突）；否则恢复右键菜单
+- 无标题栏排序按钮或 `sortEnabled` 模式。仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
+- 搜索中，以及收藏夹 `-2`、最近使用 `-3`、未分类 `-4` 视图均隐藏手柄且不得重排
+- `ItemTouchHelper` 的 `SortCallback.isLongPressDragEnabled()` 返回 false。仅手柄按下后拖动可调用 `startDrag`；卡片主体点击继续分享，主体长按继续打开右键菜单
 - `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
 - `MemeGridAdapter` 持有可变 `items`，`move(from,to)` 用 `notifyItemMoved`，`currentIds()` 供落库取序
 
@@ -167,6 +174,7 @@ Android/data/com.ohmymeme.app/
 - 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置，AWS SigV4 手写签名，endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
 - `downloadIndex` 下载远端清单到 dataDir 临时文件再解析，失败清理；`writeTempIndex` 上传前写本地临时清单
 - `push`：本地清单与远端清单按 `filename+sha256` 比对，相同且远端文件存在则跳过；`sync_delete_remote` 时删除远端多余文件；成功后合并远端仍保留的孤儿项重建清单并上传；上传失败即抛 `SyncError` 不更新远端清单
+- **Backend 接口只接受真实 `File`**（`uploadFile(local: File)/downloadFile(remotePath, dest: File)` 三实现不变）；cache/thumbnails 在 SAF 模式下经 `StorFile` 读写，push 上传前 `StorFile.copyTo(context.cacheDir 临时文件)` 物化，pull 先下载到 `context.cacheDir` 临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除
 - `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）
 - 公开 API：`syncTest`（返回 "ok" 或错误信息）、`checkSyncStatus`（返回本地/远端计数与仅本地/仅远端文件名摘要）、`push`/`pull`（返回 `SyncResult(uploaded/downloaded/skipped/errors/deleted/removedLocal/failed)`，失败抛 `SyncError`）、`deleteAllRemote`、`deleteAllLocal`
 - 单线程顺序执行（安卓端不做多线程分片）；同步配置读 `ConfigStore`（密钥字段已解密）
@@ -180,6 +188,7 @@ Android/data/com.ohmymeme.app/
 ### 局域网互联（LanClient.kt）
 - **角色**：安卓端仅客户端，连接桌面端 `lan.py` 服务（UDP 发现 + TCP 握手 + AES-GCM 会话），协议逐字节对齐
 - **UDP 发现**：`discover(context, port)` 广播 `{"t":"discover"}` 到 255.255.255.255:port，收集 1.5s 内 `{"t":"hello","name","os","ver","need_secret"}` 应答去重返回 `LanPeer` 列表
+- **IP:端口 直连**：设置页新增直连输入框 + 「直连」按钮（`connectDirect`），解析 `IP:端口` 构造 `LanPeer` 直接走 `doConnect`（复用 `LanClient.connect`，跳过 UDP 扫描），状态显示「已连接 IP（直连）」
 - **TCP 握手**（对齐 `lan.py._handshake`）：有密钥时收 `challenge{nonce}` → 回 `proof{mac=HMAC-SHA256(secret,nonce)}` → `ok/no`（3 次）；无密钥直接收 `ok`，会话密钥 32 个零字节
 - **设备确认**（`connect` 内握手后）：客户端发 `device_info` 加密帧 `{cmd, name, model, os, ver}`（`Build.MODEL`/`MANUFACTURER`/`VERSION.RELEASE`/versionName），等待电脑端弹窗确认；`{ok:true, approved:true}` 才放行，`approved:false`/错误则 `LanError`，超时 `DEVICE_CONFIRM_TIMEOUT_MS`=60s；旧版电脑端回「未知命令」时提示升级；确认响应携带 `allow_secret_config` bool 存入 `LanConnection.allowSecretConfig`
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
@@ -189,7 +198,7 @@ Android/data/com.ohmymeme.app/
 - **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
-- **UI**：设置页「局域网互联」区块（端口/密钥/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
+- **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
 - **配置键**：`lan_port`（默认 17852）/`lan_secret`（`SECRET_KEYS` 加密存储，对齐桌面端 `_SECRET_KEYS`）
 
 ## 构建 & 验证
@@ -239,17 +248,18 @@ Android/data/com.ohmymeme.app/
 - 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses，最近使用分组自动刷新
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
-- 顶部快捷同步：主界面标题栏上传/下载图标，一键 push/pull
+- 顶部快捷同步：主界面标题栏「更多」菜单提供上传/下载，一键 push/pull
 - 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要
-- 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新 localdata 目录，弹窗询问是否转移现有文件（数据库/缓存/缩略图），config.json 保持不变
+- 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新目录，`persistDataTree` 校验后弹窗询问是否转移；SAF 全量支持（`StorFile` 经 content URI 读写 cache/thumbnails，`memes.db` 留在真实路径），只转移 cache/thumbnails 两个子目录，config.json 保持不变
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
-- 拖拽排序：标题栏「排序」开关 + ItemTouchHelper 长按换位，全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
+- 拖拽排序：无标题栏开关；仅在空搜索、全局或正数真实分组且至少 2 张卡片时，由卡片左上手柄启动。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
 - 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
-- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）
+- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）
+- 「未分类」分组：顶栏胶囊显示未加入任何分组的表情（虚拟分组 `-4`，`MemeDb.search`/`count` 的 `uncategorizedOnly` 参数对应桌面端 `uncategorized_only`），计数 > 0 才显示、清零自动隐藏并退出视图；负数 id 使拖拽排序/长按分组菜单自动禁用；`CloudSync` 清单仅遍历真实 `collections` 表不受影响；设置页「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py`/`settings.html`）
 
 ### 未实现（后续待做）
 - 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）

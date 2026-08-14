@@ -3,7 +3,6 @@ package com.ohmymeme.app
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import java.io.File
 
 object MemeImporter {
 
@@ -34,7 +33,6 @@ object MemeImporter {
     fun importBytes(context: Context, bytes: ByteArray, originalName: String, srcExt: String? = null): Boolean {
         val db = MemeDb.get(context)
         val cacheDir = StoragePaths.cacheDir(context)
-        cacheDir.mkdirs()
         val ext = srcExt ?: detectExt(bytes) ?: ".png"
 
         // 隐写 GIF：解码还原原图后只导入还原结果（fromStego=1），GIF 本身不入库，与桌面端一致
@@ -64,15 +62,15 @@ object MemeImporter {
 
         val fhash = FileUtils.sha256(java.io.ByteArrayInputStream(payload))
         if (db.getByHash(fhash) != null) return false
-        val dst = File(cacheDir, "${fhash.substring(0, 16)}$realExt")
-        dst.writeBytes(payload)
         val mime = "image/${realExt.substring(1)}"
+        val dst = cacheDir.createFile("${fhash.substring(0, 16)}$realExt", mime)
+        dst.writeBytes(payload)
         db.addMeme(
             filename = dst.name,
             fileHash = fhash,
             width = dims.first,
             height = dims.second,
-            fileSize = dst.length(),
+            fileSize = dst.length,
             mimeType = mime,
             originalName = originalName.substringBeforeLast('.'),
             fromStego = fromStego
