@@ -16,6 +16,7 @@
     <string name="storage_use_default">使用默认位置</string>
     <string name="storage_pick_custom">选择其他位置</string>
     <string name="storage_pick_failed">所选位置不可用，已使用默认位置</string>
+    <string name="storage_pick_not_writable">所选位置无法写入，请选择应用可访问的目录</string>
     <string name="import_done">已导入 %1$d 个表情包</string>
     <string name="scan_done">缓存扫描完成，新增 %1$d 个</string>
     <string name="empty_title">还没有表情包</string>
@@ -181,6 +182,9 @@
     <string name="lan_port">端口</string>
     <string name="lan_secret">互联密钥</string>
     <string name="lan_secret_hint">留空表示信任局域网</string>
+    <string name="lan_direct_hint">IP:端口 直连，如 192.168.1.100:17852</string>
+    <string name="btn_lan_direct">直连</string>
+    <string name="lan_direct_invalid">请输入合法的 IP:端口，如 192.168.1.100:17852</string>
     <string name="btn_lan_scan">扫描电脑</string>
     <string name="btn_lan_connect">连接</string>
     <string name="btn_lan_disconnect">断开</string>
@@ -198,6 +202,7 @@
     <string name="lan_scan_none">未发现电脑，请确认电脑端已开启局域网服务</string>
     <string name="lan_scan_found">发现 %1$d 台电脑：</string>
     <string name="lan_status_connected">已连接 %1$s（%2$s %3$s）</string>
+    <string name="lan_status_connected_direct">已连接 %1$s（直连）</string>
     <string name="lan_status_disconnected">未连接</string>
     <string name="lan_pick_peer">选择要连接的电脑</string>
     <string name="lan_pull_done">已从电脑拉取 %1$d 个表情（跳过 %2$d，失败 %3$d）</string>

@@ -762,7 +762,7 @@ class MainActivity : AppCompatActivity() {
                 val shareFile = if (processed != null) {
                     processed.file
                 } else {
-                    File(cache, "share_${meme.id}_${file.name}").also { file.copyTo(it, overwrite = true) }
+                    File(cache, "share_${meme.id}_${file.name}").also { file.copyTo(it) }
                 }
                 val mime = processed?.mimeType ?: meme.mimeType.ifEmpty { "image/*" }
                 val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", shareFile)
@@ -828,10 +828,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun deleteMemeFiles(meme: Meme) {
-        Thumbnailer.findMemeFile(this, meme.filename)?.let { it.delete() }
+        Thumbnailer.findMemeFile(this, meme.filename)?.delete()
         StoragePaths.thumbnailDir(this).listFiles()
-            ?.filter { it.name.startsWith("${meme.id}_") }
-            ?.forEach { it.delete() }
+            .filter { it.name.startsWith("${meme.id}_") }
+            .forEach { it.delete() }
     }
 
     private fun pickImages() {
@@ -922,11 +922,10 @@ class MainActivity : AppCompatActivity() {
     private fun handlePickDirResult(resultCode: Int, data: Intent?) {
         val uri = data?.data
         if (resultCode == RESULT_OK && uri != null) {
-            val path = StoragePaths.resolveTreeUriPath(this, uri)
-            if (path != null) {
-                StoragePaths.setDataDir(this, path)
+            if (StoragePaths.persistDataTree(this, uri)) {
+                StoragePaths.setDataTree(this, uri)
             } else {
-                toast(getString(R.string.storage_pick_failed))
+                toast(getString(R.string.storage_pick_not_writable))
             }
         }
         StoragePaths.markSetupDone(this)

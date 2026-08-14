@@ -32,11 +32,21 @@ class MemeDb(context: Context) {
     }
 
     init {
-        db = SQLiteDatabase.openDatabase(
-            StoragePaths.dbPath(context).absolutePath,
-            null,
-            SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
-        )
+        db = try {
+            SQLiteDatabase.openDatabase(
+                StoragePaths.dbPath(context).absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
+            )
+        } catch (e: android.database.sqlite.SQLiteException) {
+            android.util.Log.w(TAG, "open DB failed, resetting dataDir to default: $e")
+            StoragePaths.resetDataDir(context)
+            SQLiteDatabase.openDatabase(
+                StoragePaths.dbPath(context).absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
+            )
+        }
         db.enableWriteAheadLogging()
         initSchema()
         android.util.Log.d(TAG, "opened ${db.path}")

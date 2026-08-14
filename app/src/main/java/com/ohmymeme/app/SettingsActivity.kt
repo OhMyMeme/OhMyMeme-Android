@@ -21,7 +21,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.io.File
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -223,7 +222,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun setupStorage() {
         findViewById<TextView>(R.id.tv_storage_path).text =
-            getString(R.string.storage_current, StoragePaths.dataDir(this).absolutePath)
+            getString(R.string.storage_current, StoragePaths.describeDataLocation(this))
         findViewById<TextView>(R.id.btn_change_storage).setOnClickListener {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
             storageDirLauncher.launch(intent)
@@ -231,40 +230,38 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun onStorageDirPicked(uri: Uri) {
-        val newDir = StoragePaths.resolveTreeUriPath(this, uri)
-        if (newDir == null) {
-            toast(getString(R.string.storage_pick_failed))
+        if (!StoragePaths.persistDataTree(this, uri)) {
+            toast(getString(R.string.storage_pick_not_writable))
             return
         }
-        val oldDir = StoragePaths.dataDir(this)
-        if (oldDir.absolutePath == newDir.absolutePath) return
+        if (StoragePaths.dataTreeUri(this) == uri) return
         android.app.AlertDialog.Builder(this)
             .setTitle(getString(R.string.storage_transfer_title))
             .setMessage(getString(R.string.storage_transfer_message))
             .setPositiveButton(getString(R.string.storage_transfer)) { _, _ ->
-                moveLocalData(oldDir, newDir)
+                moveDataToTree(uri)
             }
             .setNegativeButton(getString(R.string.storage_no_transfer)) { _, _ ->
-                applyNewStorageDir(newDir)
+                applyStorageTree(uri)
             }
             .show()
     }
 
-    private fun moveLocalData(oldDir: File, newDir: File) {
+    private fun moveDataToTree(newTree: Uri) {
         Thread {
             try {
-                MemeDb.close()
-                newDir.mkdirs()
-                oldDir.listFiles()?.forEach { child ->
-                    val target = File(newDir, child.name)
-                    if (child.isDirectory) {
-                        copyRecursive(child, target)
-                    } else {
-                        child.copyTo(target, overwrite = true)
+                val oldRoot = StoragePaths.dataRoot(this)
+                val newRoot = StorFile.safRoot(this, newTree)
+                // 只迁移 cache/thumbnails 两个数据目录，memes.db 始终留在真实路径不迁移
+                for (name in listOf("cache", "thumbnails")) {
+                    val src = oldRoot.child(name)
+                    if (src.exists) {
+                        copyChildren(src, newRoot.childOrCreateDir(name))
+                        deleteStor(src)
                     }
                 }
                 runOnUiThread {
-                    applyNewStorageDir(newDir)
+                    applyStorageTree(newTree)
                     toast(getString(R.string.storage_moved))
                 }
             } catch (e: Exception) {
@@ -273,18 +270,25 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun copyRecursive(src: File, dst: File) {
-        if (src.isDirectory) {
-            dst.mkdirs()
-            src.listFiles()?.forEach { child -> copyRecursive(child, File(dst, child.name)) }
-        } else {
-            dst.parentFile?.mkdirs()
-            src.copyTo(dst, overwrite = true)
+    private fun copyChildren(srcDir: StorFile, dstDir: StorFile) {
+        srcDir.listFiles().forEach { child ->
+            if (child.isDirectory) {
+                copyChildren(child, dstDir.childOrCreateDir(child.name))
+            } else {
+                dstDir.createFile(child.name, "application/octet-stream").copyFrom(child)
+            }
         }
     }
 
-    private fun applyNewStorageDir(dir: File) {
-        StoragePaths.setDataDir(this, dir)
+    private fun deleteStor(stor: StorFile) {
+        if (stor.isDirectory) {
+            stor.listFiles().forEach { deleteStor(it) }
+        }
+        stor.delete()
+    }
+
+    private fun applyStorageTree(uri: Uri) {
+        StoragePaths.setDataTree(this, uri)
         ConfigStore.invalidate()
     }
 
@@ -297,6 +301,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tv_lan_status).text = getString(R.string.lan_status_disconnected)
         findViewById<TextView>(R.id.btn_lan_scan).setOnClickListener { scanLan() }
         findViewById<TextView>(R.id.btn_lan_connect).setOnClickListener { connectLan() }
+        findViewById<TextView>(R.id.btn_lan_direct).setOnClickListener { connectDirect() }
         findViewById<TextView>(R.id.btn_lan_pull).setOnClickListener {
             lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { LanClient.pull(this, it) }
         }
@@ -450,6 +455,22 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun connectDirect() {
+        val raw = textOf(R.id.et_lan_direct).trim()
+        val idx = raw.lastIndexOf(':')
+        if (idx <= 0 || idx == raw.length - 1) {
+            toast(getString(R.string.lan_direct_invalid))
+            return
+        }
+        val ip = raw.substring(0, idx).trim()
+        val port = raw.substring(idx + 1).trim().toIntOrNull()
+        if (port == null || port !in 1..65535 || ip.isEmpty() || ip.any { it.isWhitespace() }) {
+            toast(getString(R.string.lan_direct_invalid))
+            return
+        }
+        doConnect(LanClient.LanPeer(ip = ip, port = port, name = ip, os = "", ver = "", needSecret = false))
+    }
+
     private fun doConnect(peer: LanClient.LanPeer) {
         val btn = findViewById<TextView>(R.id.btn_lan_connect)
         btn.isEnabled = false
@@ -463,10 +484,14 @@ class SettingsActivity : AppCompatActivity() {
                 runOnUiThread {
                     btn.isEnabled = true
                     btn.text = getString(R.string.btn_lan_disconnect)
-                    findViewById<TextView>(R.id.tv_lan_status).text =
+                    val status = if (peer.os.isBlank() && peer.ver.isBlank()) {
+                        getString(R.string.lan_status_connected_direct, peer.name)
+                    } else {
                         getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver)
+                    }
+                    findViewById<TextView>(R.id.tv_lan_status).text = status
                     updateKeyRow()
-                    toast(getString(R.string.lan_status_connected, peer.name, peer.os, peer.ver))
+                    toast(status)
                 }
             } catch (e: Exception) {
                 runOnUiThread {

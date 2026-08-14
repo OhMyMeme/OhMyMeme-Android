@@ -1,7 +1,6 @@
 package com.ohmymeme.app
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
@@ -12,7 +11,6 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -100,8 +98,8 @@ class MemeGridAdapter(
     private fun isAnimatedFile(meme: Meme): Boolean {
         if (meme.mimeType.endsWith("gif") || meme.filename.lowercase().endsWith(".gif")) return true
         if (meme.filename.lowercase().endsWith(".webp")) {
-            val f = File(StoragePaths.cacheDir(context), meme.filename)
-            if (!f.exists()) return false
+            val f = StoragePaths.cacheDir(context).child(meme.filename)
+            if (!f.exists) return false
             return FileUtils.isAnimatedFile(f)
         }
         return false
@@ -125,9 +123,14 @@ class MemeGridAdapter(
         }
     }
 
-    private fun decodeAnimated(file: File): Drawable? {
+    private fun decodeAnimated(stor: StorFile): Drawable? {
         return try {
-            val source = ImageDecoder.createSource(file)
+            val uri = stor.uri
+            val source = if (uri != null) {
+                ImageDecoder.createSource(context.contentResolver, uri)
+            } else {
+                ImageDecoder.createSource(stor.realFile!!)
+            }
             ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
                 decoder.setTargetSampleSize(sampleSize(info.size.width, info.size.height, 300))
             }
@@ -137,16 +140,13 @@ class MemeGridAdapter(
     }
 
     private fun loadThumb(img: ImageView, meme: Meme) {
-        val path = Thumbnailer.getThumbPath(context, meme.id, meme.filename)
-        if (path != null && img.tag == meme.id) {
-            val bitmap = BitmapFactory.decodeFile(path)
-            if (bitmap != null && img.tag == meme.id) {
-                img.post {
-                    if (img.tag == meme.id) {
-                        img.setColorFilter(null)
-                        img.setImageTintList(null)
-                        img.setImageBitmap(bitmap)
-                    }
+        val bitmap = Thumbnailer.getThumbBitmap(context, meme.id, meme.filename)
+        if (bitmap != null && img.tag == meme.id) {
+            img.post {
+                if (img.tag == meme.id) {
+                    img.setColorFilter(null)
+                    img.setImageTintList(null)
+                    img.setImageBitmap(bitmap)
                 }
             }
         }

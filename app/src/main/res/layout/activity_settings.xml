@@ -1085,6 +1085,40 @@
                     android:textSize="12.5sp" />
             </LinearLayout>
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <EditText
+                    android:id="@+id/et_lan_direct"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_input"
+                    android:hint="@string/lan_direct_hint"
+                    android:inputType="text"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/fg"
+                    android:textColorHint="@color/muted"
+                    android:textSize="12.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_direct"
+                    android:layout_width="wrap_content"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:paddingHorizontal="16dp"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_direct"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/tv_lan_status"
                 android:layout_width="wrap_content"
