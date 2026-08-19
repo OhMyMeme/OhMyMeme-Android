@@ -1,6 +1,6 @@
 import java.util.Properties
 
-val appVersionName = "0.4.6"
+val appVersionName = "0.5.0"
 
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
@@ -32,7 +32,7 @@ android {
         applicationId = "com.ohmymeme.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 10
+        versionCode = 11
         versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

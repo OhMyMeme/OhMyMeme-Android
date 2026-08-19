@@ -177,6 +177,21 @@ class MemeDb(context: Context) {
         android.util.Log.d(TAG, "deleteMeme id=$memeId")
     }
 
+    fun deleteMemes(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val ph = ids.joinToString(",") { "?" }
+        val args = ids.map { it.toString() }.toTypedArray()
+        db.beginTransaction()
+        try {
+            db.delete("memes", "id IN ($ph)", args)
+            db.delete("tags", "id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)", null)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        android.util.Log.d(TAG, "deleteMemes count=${ids.size}")
+    }
+
     fun updateMeme(memeId: Long, updates: Map<String, Any>) {
         val allowed = setOf(
             "filename", "file_hash", "width", "height", "file_size",
@@ -214,6 +229,7 @@ class MemeDb(context: Context) {
                     )
                 }
             }
+            db.execSQL("DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)")
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -235,6 +251,23 @@ class MemeDb(context: Context) {
         val result = mutableListOf<String>()
         db.rawQuery("SELECT name FROM tags ORDER BY name", null).use { cur ->
             while (cur.moveToNext()) result.add(cur.getString(0))
+        }
+        return result
+    }
+
+    fun memeIdsWithAllTags(tags: List<String>): Set<Long> {
+        if (tags.isEmpty()) return emptySet()
+        val placeholders = tags.joinToString(",") { "?" }
+        val args = mutableListOf<String>()
+        args.addAll(tags)
+        args.add(tags.size.toString())
+        val result = mutableSetOf<Long>()
+        db.rawQuery(
+            "SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
+                "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id HAVING COUNT(DISTINCT t.id) = ?",
+            args.toTypedArray()
+        ).use { cur ->
+            while (cur.moveToNext()) result.add(cur.getLong(0))
         }
         return result
     }

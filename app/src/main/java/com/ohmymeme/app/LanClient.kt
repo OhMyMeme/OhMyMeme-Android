@@ -31,7 +31,6 @@ object LanClient {
     private const val TAG = "OhMyMeme/LanClient"
     private const val PROTOCOL_VERSION = 1
     private const val MAX_FRAME = 64 * 1024 * 1024
-    private const val MAX_FILE_SIZE = 64L * 1024 * 1024
     private const val HANDSHAKE_TIMEOUT_MS = 10_000
     private const val DEVICE_CONFIRM_TIMEOUT_MS = 60_000
     private const val IDLE_TIMEOUT_MS = 60_000
@@ -161,7 +160,7 @@ object LanClient {
             }
             try {
                 val data = conn.pullFile(fname)
-                if (data.size.toLong() > MAX_FILE_SIZE) {
+                if (data.size.toLong() > MemeImporter.MAX_BYTES) {
                     errors++
                     failed.add(fname)
                     continue
@@ -181,8 +180,16 @@ object LanClient {
                     continue
                 }
                 val oname = m.optString("name", "").ifEmpty { fname.substringBeforeLast('.') }
-                val imported = MemeImporter.importBytes(context, data, oname)
-                if (imported) pulled++ else skipped++
+                when (MemeImporter.importBytes(context, data, oname)) {
+                    MemeImporter.ImportOutcome.IMPORTED -> pulled++
+                    MemeImporter.ImportOutcome.OVER_LIMIT,
+                    MemeImporter.ImportOutcome.INVALID,
+                    MemeImporter.ImportOutcome.FAILED -> {
+                        errors++
+                        failed.add(fname)
+                    }
+                    MemeImporter.ImportOutcome.DUPLICATE -> skipped++
+                }
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "pull file failed $fname: $e")
                 errors++

@@ -1,26 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
-    <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-        xmlns:app="http://schemas.android.com/apk/res-auto"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@color/bg"
-        android:fitsSystemWindows="true"
-        android:orientation="vertical">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="16dp"
+        android:paddingStart="8dp"
         android:paddingTop="10dp"
         android:paddingEnd="4dp"
         android:paddingBottom="8dp">
+
+        <ImageView
+            android:id="@+id/btn_sidebar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/action_toggle_sidebar"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_sidebar"
+            app:tint="@color/muted" />
 
         <TextView
             android:id="@+id/tv_logo"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:text="@string/app_name"
             android:textColor="@color/fg"
@@ -31,6 +43,17 @@
             android:layout_width="0dp"
             android:layout_height="1dp"
             android:layout_weight="1" />
+
+        <ImageView
+            android:id="@+id/btn_sort_mode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_title_btn"
+            android:contentDescription="@string/action_sort_mode"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="7dp"
+            android:src="@drawable/ic_sort"
+            app:tint="@color/muted" />
 
         <TextView
             android:id="@+id/btn_import"
@@ -91,7 +114,7 @@
         android:textSize="13.5sp" />
 
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rv_collections"
+        android:id="@+id/rv_tags"
         android:layout_width="match_parent"
         android:layout_height="36dp"
         android:clipToPadding="false"
@@ -101,42 +124,121 @@
         android:paddingEnd="16dp"
         android:paddingBottom="2dp" />
 
-    <FrameLayout
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:orientation="horizontal">
 
         <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/rv_memes"
-            android:layout_width="match_parent"
+            android:id="@+id/rv_sidebar"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
+            android:layout_weight="0.55"
+            android:background="@color/surface"
             android:clipToPadding="false"
             android:overScrollMode="never"
-            android:padding="12dp" />
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:visibility="gone" />
 
-        <LinearLayout
-            android:id="@+id/empty_state"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:visibility="gone">
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
 
-            <TextView
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_memes"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:overScrollMode="never"
+                android:padding="12dp" />
+
+            <LinearLayout
+                android:id="@+id/empty_state"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="_(:3 」∠)_"
-                android:textColor="@color/muted"
-                android:textSize="38sp" />
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:visibility="gone">
 
-            <TextView
-                android:layout_width="wrap_content"
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="_(:3 」∠)_"
+                    android:textColor="@color/muted"
+                    android:textSize="38sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/empty_hint"
+                    android:textColor="@color/muted"
+                    android:textSize="13.5sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/manage_bar"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/empty_hint"
-                android:textColor="@color/muted"
-                android:textSize="13.5sp" />
-        </LinearLayout>
-    </FrameLayout>
+                android:layout_gravity="bottom"
+                android:background="@color/surface"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tv_manage_count"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/fg_secondary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btn_manage_select_all"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="@string/manage_select_all"
+                    android:textColor="@color/accent"
+                    android:textSize="12.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_manage_cancel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="@string/cancel"
+                    android:textColor="@color/muted"
+                    android:textSize="12.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_manage_delete"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_title_btn"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="@string/manage_delete"
+                    android:textColor="@color/danger"
+                    android:textSize="12.5sp" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
 </LinearLayout>

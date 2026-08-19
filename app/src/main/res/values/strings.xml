@@ -18,6 +18,8 @@
     <string name="storage_pick_failed">所选位置不可用，已使用默认位置</string>
     <string name="storage_pick_not_writable">所选位置无法写入，请选择应用可访问的目录</string>
     <string name="import_done">已导入 %1$d 个表情包</string>
+    <string name="import_rejected">，跳过 %1$d 个（重复或超限）</string>
+    <string name="import_errors">，失败 %1$d 个</string>
     <string name="scan_done">缓存扫描完成，新增 %1$d 个</string>
     <string name="empty_title">还没有表情包</string>
     <string name="empty_hint">点击「导入」添加</string>
@@ -32,6 +34,11 @@
     <string name="ctx_rename">重命名</string>
     <string name="ctx_favorite">收藏</string>
     <string name="ctx_unfavorite">取消收藏</string>
+    <string name="ctx_tag">打标签</string>
+    <string name="tag_editor_title">编辑标签</string>
+    <string name="tag_input_hint">搜索已有标签或输入新标签，回车添加</string>
+    <string name="tag_selected_label">已选：</string>
+    <string name="tags_saved">标签已保存</string>
     <string name="ctx_add_collection">添加分组</string>
     <string name="ctx_add_subgroup">加入小分组</string>
     <string name="new_subcollection_title">新建小分组</string>
@@ -44,12 +51,15 @@
     <string name="rename_hint">输入新名称</string>
     <string name="add_collection_dialog_title">添加分组</string>
     <string name="add_collection_hint">输入分组名称</string>
+    <string name="add_collection_name_hint">输入新分组名或选择下方已有分组…</string>
+    <string name="add_collection_existing_section">加入已有分组</string>
     <string name="collection_favorites">收藏夹</string>
     <string name="collection_recent">最近使用</string>
     <string name="collection_uncategorized">未分类</string>
     <string name="delete_confirm_title">删除确认</string>
     <string name="delete_confirm_message">确定删除「%1$s」？此操作不可恢复。</string>
     <string name="ok">确定</string>
+    <string name="create_group">创建分组</string>
     <string name="cancel">取消</string>
     <string name="favorited">已收藏</string>
     <string name="unfavorited">已取消收藏</string>
@@ -88,6 +98,7 @@
 
     <string name="collections_section">分组</string>
     <string name="settings_show_uncategorized">显示「未分类」分组</string>
+    <string name="settings_record_recent_use">复制/分享时记录最近使用</string>
 
     <string name="copy_process_title">复制处理</string>
     <string name="copy_process_label">复制超限静态图时</string>
@@ -124,6 +135,12 @@
     <string name="s3_bucket">Bucket</string>
     <string name="s3_access_key">Access Key</string>
     <string name="s3_secret_key">Secret Key</string>
+    <string name="s3_addressing_style_label">寻址方式</string>
+    <string name="s3_signature_version_label">签名版本</string>
+    <string name="s3_addressing_virtual">虚拟主机型 (Virtual-hosted)</string>
+    <string name="s3_addressing_path">路径型 (Path-style)</string>
+    <string name="s3_signature_v2">V2（兼容 OSS）</string>
+    <string name="s3_signature_v4">V4（AWS S3）</string>
     <string name="path_prefix_opt">路径前缀（可选）</string>
     <string name="r2_account_id">Cloudflare Account ID</string>
     <string name="r2_access_key_id">R2 Access Key ID</string>
@@ -229,6 +246,20 @@
     <string name="action_meme_menu">更多操作</string>
     <string name="drag_file_missing">文件缺失</string>
 
+    <string name="action_toggle_sidebar">分组侧栏</string>
+    <string name="action_sort_mode">整理模式</string>
+    <string name="sort_mode_on">整理模式已开启，点击卡片进行多选</string>
+    <string name="sort_mode_off">整理模式已关闭</string>
+    <string name="action_toggle_drag_sort">拖拽排序</string>
+    <string name="drag_sort_on">拖拽排序已开启</string>
+    <string name="drag_sort_off">拖拽排序已关闭</string>
+    <string name="manage_select_all">全选</string>
+    <string name="manage_delete">批量删除</string>
+    <string name="manage_selected_count">已选 %1$d 项</string>
+    <string name="manage_batch_confirm">确定删除选中的 %1$d 个表情包吗？此操作不可恢复。</string>
+    <string name="manage_delete_done">已删除 %1$d 个表情包</string>
+    <string name="manage_delete_empty">请先选择表情包</string>
+
     <string name="btn_reset">恢复默认</string>
     <string name="btn_save">保存</string>
     <string name="config_saved">已保存</string>
@@ -247,5 +278,15 @@
         <item>@string/sync_type_s3</item>
         <item>@string/sync_type_r2</item>
         <item>@string/sync_type_webdav</item>
+    </string-array>
+
+    <string-array name="s3_addressing_options">
+        <item>@string/s3_addressing_virtual</item>
+        <item>@string/s3_addressing_path</item>
+    </string-array>
+
+    <string-array name="s3_signature_options">
+        <item>@string/s3_signature_v2</item>
+        <item>@string/s3_signature_v4</item>
     </string-array>
 </resources>

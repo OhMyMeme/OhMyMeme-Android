@@ -8,29 +8,50 @@ object MemeImporter {
 
     private const val TAG = "OhMyMeme/MemeImporter"
 
-    fun importUris(context: Context, uris: List<Uri>): Int {
+    // 导入上限，对齐桌面端 src/config.py _IMPORT_MAX_BYTES / _IMPORT_MAX_PX
+    const val MAX_BYTES = 20 * 1024 * 1024
+    const val MAX_PX = 2560
+
+    enum class ImportOutcome { IMPORTED, DUPLICATE, OVER_LIMIT, INVALID, FAILED }
+
+    data class ImportResult(val imported: Int, val rejected: Int, val errors: List<String>)
+
+    fun importUris(context: Context, uris: List<Uri>): ImportResult {
         var imported = 0
+        var rejected = 0
+        val errors = mutableListOf<String>()
         for (uri in uris) {
+            val originalName = queryDisplayName(context, uri) ?: "未命名"
             try {
-                val originalName = queryDisplayName(context, uri)
-                    ?: "未命名"
-                val srcExt = detectExtFromUri(context, uri) ?: ".png"
+                val srcExt = detectExtFromUri(context, uri)
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: continue
-                if (importBytes(context, bytes, originalName, srcExt)) imported++
+                when (importBytes(context, bytes, originalName, srcExt)) {
+                    ImportOutcome.IMPORTED -> imported++
+                    ImportOutcome.DUPLICATE,
+                    ImportOutcome.OVER_LIMIT,
+                    ImportOutcome.INVALID -> rejected++
+                    ImportOutcome.FAILED -> errors.add(originalName)
+                }
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "import failed for $uri: $e")
+                errors.add(originalName)
             }
         }
-        android.util.Log.d(TAG, "import finished, imported=$imported")
-        return imported
+        android.util.Log.d(TAG, "import finished, imported=$imported rejected=$rejected errors=${errors.size}")
+        return ImportResult(imported, rejected, errors)
     }
 
     /**
      * 把内存字节按哈希去重后入库（LAN 推送/接收复用）。
-     * @return true 表示真正入库（非重复）
+     * 隐写 GIF 还原、可解码校验、大小/分辨率上限均在此处执行，与桌面端一致。
      */
-    fun importBytes(context: Context, bytes: ByteArray, originalName: String, srcExt: String? = null): Boolean {
+    fun importBytes(
+        context: Context,
+        bytes: ByteArray,
+        originalName: String,
+        srcExt: String? = null
+    ): ImportOutcome {
         val db = MemeDb.get(context)
         val cacheDir = StoragePaths.cacheDir(context)
         val ext = srcExt ?: detectExt(bytes) ?: ".png"
@@ -53,15 +74,24 @@ object MemeImporter {
             fromStego = 0
         }
 
-        // 先校验内容为合法可解码图片（宽高 > 0），通过后才落盘，杜绝孤儿缓存文件
+        if (payload.size > MAX_BYTES) {
+            android.util.Log.w(TAG, "拒绝导入超限文件（大小 ${payload.size} > ${MAX_BYTES / 1024 / 1024}MB）")
+            return ImportOutcome.OVER_LIMIT
+        }
+
+        // 先校验内容为合法可解码图片（宽高 > 0）与分辨率上限，通过后才落盘，杜绝孤儿缓存文件
         val dims = decodeBounds(payload)
         if (dims.first <= 0 || dims.second <= 0) {
             android.util.Log.w(TAG, "拒绝导入非图片内容（宽高 $dims, ext=$realExt）")
-            return false
+            return ImportOutcome.INVALID
+        }
+        if (maxOf(dims.first, dims.second) > MAX_PX) {
+            android.util.Log.w(TAG, "拒绝导入超限文件（分辨率 ${dims.first}x${dims.second} > ${MAX_PX}）")
+            return ImportOutcome.OVER_LIMIT
         }
 
         val fhash = FileUtils.sha256(java.io.ByteArrayInputStream(payload))
-        if (db.getByHash(fhash) != null) return false
+        if (db.getByHash(fhash) != null) return ImportOutcome.DUPLICATE
         val mime = "image/${realExt.substring(1)}"
         val dst = cacheDir.createFile("${fhash.substring(0, 16)}$realExt", mime)
         dst.writeBytes(payload)
@@ -76,7 +106,7 @@ object MemeImporter {
             fromStego = fromStego
         )
         android.util.Log.d(TAG, "imported ${dst.name}")
-        return true
+        return ImportOutcome.IMPORTED
     }
 
     /** 用 BitmapFactory 只读宽高，不真正解码，判断是否为可解码图片 */

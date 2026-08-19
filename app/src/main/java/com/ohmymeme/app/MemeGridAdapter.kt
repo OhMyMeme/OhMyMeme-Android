@@ -18,13 +18,16 @@ import java.util.concurrent.Executors
 class MemeGridAdapter(
     private val context: Context,
     items: List<Meme>,
-    private val canOrder: Boolean
+    private val canOrder: Boolean,
+    private val manageMode: Boolean = false,
+    private val selectedIds: MutableSet<Long> = mutableSetOf()
 ) : RecyclerView.Adapter<MemeGridAdapter.MemeViewHolder>() {
 
     private val items: MutableList<Meme> = items.toMutableList()
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     var onItemClick: ((View, Meme) -> Unit)? = null
+    var onSelectToggle: ((Meme) -> Unit)? = null
     var onMenuClick: ((View, Meme) -> Unit)? = null
     var onDragStart: ((View, Meme) -> Unit)? = null
     var onDragFailed: ((View, Meme) -> Unit)? = null
@@ -38,6 +41,8 @@ class MemeGridAdapter(
     }
 
     fun currentIds(): List<Long> = items.map { it.id }
+
+    fun itemsByIds(ids: Collection<Long>): List<Meme> = items.filter { ids.contains(it.id) }
 
     class MemeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 
@@ -53,17 +58,22 @@ class MemeGridAdapter(
         val badge = holder.itemView.findViewById<TextView>(R.id.tv_meme_badge)
         val dragHandle = holder.itemView.findViewById<ImageView>(R.id.btn_drag_handle)
         val menuButton = holder.itemView.findViewById<View>(R.id.btn_meme_menu)
+        val selectCheck = holder.itemView.findViewById<TextView>(R.id.tv_select_check)
         (img.drawable as? AnimatedImageDrawable)?.stop()
         img.setImageResource(R.drawable.ic_photo)
         img.setColorFilter(context.getColor(R.color.muted))
         img.tag = meme.id
         name.text = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
         holder.itemView.setOnClickListener {
-            onItemClick?.invoke(it, meme)
+            if (manageMode) onSelectToggle?.invoke(meme) else onItemClick?.invoke(it, meme)
         }
         holder.itemView.setOnLongClickListener {
-            onDragStart?.invoke(it, meme)
-            true
+            if (manageMode) {
+                false
+            } else {
+                onDragStart?.invoke(it, meme)
+                true
+            }
         }
         holder.itemView.setOnDragListener { v, e ->
             if (e.action == DragEvent.ACTION_DRAG_ENDED && !e.result) {
@@ -71,10 +81,13 @@ class MemeGridAdapter(
             }
             true
         }
+        menuButton.visibility = if (manageMode) View.GONE else View.VISIBLE
         menuButton.setOnClickListener {
             onMenuClick?.invoke(it, meme)
         }
         menuButton.setOnLongClickListener { true }
+        selectCheck.visibility =
+            if (manageMode && selectedIds.contains(meme.id)) View.VISIBLE else View.GONE
         dragHandle.visibility = if (canOrder) View.VISIBLE else View.GONE
         dragHandle.setOnTouchListener(null)
         if (canOrder) {

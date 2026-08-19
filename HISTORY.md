@@ -1,3 +1,21 @@
+# v0.5.0 — 桌面端布局复刻 + 标签系统 + 整理模式 + S3 OSS 兼容
+
+## 新增
+
+- **主界面布局复刻桌面端** — 顶栏改为「折叠按钮 + logo + 图标」一行、搜索框独立一行；新增左侧**常驻分组树侧栏**（桌面式，约 36% 宽，默认收起，点击顶栏折叠按钮切换，`SidebarTreeAdapter` + `rv_sidebar`），支持展开/收起子分组（1 层限制）；原分组胶囊行改为**标签行**（`rv_tags`），分组树/标签/关键词可叠加过滤（`MemeDb.memeIdsWithAllTags` 全含匹配）
+- **标签系统（对齐桌面端 TagEditor + App.vue 标签栏）** — 长按菜单新增「打标签」（`act_tag`），对话框支持搜索已有标签、点选/取消、回车新建，保存走 `setMemeTags`（孤儿标签自动清理）；顶栏标签行点击即可叠加筛选（再次点击取消），与分组/关键词过滤叠加，对齐桌面端 `search_memes` 的 `tags` 参数
+- **整理模式（对齐桌面端多选批量删除）** — 顶栏排序图标改为进入整理模式：点击卡片勾选（`tv_select_check` 徽标）、底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除」；批量删除走 `MemeDb.deleteMemes`（单事务 + 孤儿标签清理）并物理删除文件与缩略图，对齐桌面端 `delete_memes`；整理模式与拖拽排序互斥
+- **拖拽排序入口移至「更多」菜单** — 新增「拖拽排序」菜单项（`act_toggle_drag_sort`，仅空搜索、全局或正数真实分组且 ≥2 张卡片时可用），与整理模式互斥
+- **导入上限对齐桌面端（`config.py` `_IMPORT_MAX_BYTES`/`_IMPORT_MAX_PX`）** — 单文件 >20MiB 或任一边 >2560px 拒绝导入（`MemeImporter.MAX_BYTES`/`MAX_PX`，`ImportOutcome`/`ImportResult` 汇总）；SAF 批量导入逐文件失败不影响其余，结束 Toast 汇总成功/跳过/超限/失败数；局域网拉取（`LanClient`）与云端 pull（`CloudSync`）同样执行超限校验并跳过
+- **S3 OSS 兼容（对齐桌面端 boto3 配置）** — `S3Backend` 支持 **V2 签名**（`signature_version="s3"`，HMAC-SHA1 + `Authorization: AWS ak:base64sig`）与**虚拟主机寻址**（`addressing_style="virtual"`，`https://bucket.endpoint/key`），默认即 V2+virtual（对齐桌面端 `config.py` 默认值）；设置页 S3 区新增「签名版本 / 寻址方式」下拉；R2 强制 SigV4 + path 寻址不受影响
+- **添加分组交互对齐桌面端 CollectionBuilder** — 长按菜单「添加分组」改为两段式对话框：输入新分组名创建，或从「加入已有分组」列表点选即加入（仅列出真实分组 id>0）
+- **最近使用开关（对齐桌面端 `record_recent_use`）** — 设置页「分组」区块新增「复制/分享时记录最近使用」开关（默认开），关闭后点击/拖拽/分享不再写入 `recent_uses`，`ConfigStore.DEFAULTS` 已同步默认值
+- **更新检查稳定版过滤** — GitHub Releases 列表回退路径跳过 `draft`/`prerelease` 与 tag 含 `nightly`/`beta`/`rc` 的版本，只推送正式版
+
+## 其他
+
+- **版本号** — versionCode 11 / versionName 0.5.0
+
 # v0.4.6 — 控制中心快捷按钮 + 相册式拖拽
 
 ## 新增

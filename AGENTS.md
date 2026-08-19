@@ -28,6 +28,7 @@ ConfigStore + CryptoUtil ──► config.json（密钥 AES-GCM 加密）
 - **增改同步** — 新功能/新文件必须同步更新 `README.md` 和 `AGENTS.md`
 - **无 emoji**（除非用户要求）
 - **代码风格** — 无冗余注释；单线程 Executor 跑数据库/IO，`runOnUiThread` 回主线程更新 UI；Kotlin 按语言惯例写类型标注
+- 使用中文回答用户的问题（除非用户要求其他语言）
 
 ## 关键目录
 ```
@@ -36,7 +37,7 @@ app/src/main/
     MainActivity.kt     # 主界面：导入/刷新/搜索/网格 + 空状态
     SettingsActivity.kt # 设置页：loadConfig/saveConfig/reset 接真实配置
     ChipAdapter.kt      # 分组胶囊适配器（仅 COLLECTION 样式）
-    MemeGridAdapter.kt  # 表情网格，异步缩略图加载，按 meme.id 打 tag 防错位
+    MemeGridAdapter.kt  # 表情网格，异步缩略图加载，按 meme.id 打 tag 防错位；整理模式勾选态
     Meme.kt             # 数据模型（对应 memes 表，含 stego/fromStego 字段）
     MemeDb.kt           # SQLite 封装（7 表 + 索引 + 列迁移）
     ConfigStore.kt      # JSON 配置（DEFAULTS 与桌面端 config.py 一致）
@@ -45,7 +46,8 @@ app/src/main/
     StorFile.kt         # 统一文件句柄：SAF content URI / 真实路径 双模式读写 cache/thumbnails
     FileUtils.kt        # SHA-256 + 魔数识别扩展名
     CacheScanner.kt     # 缓存扫描（双重去重）
-    MemeImporter.kt     # SAF 批量导入
+    MemeImporter.kt     # SAF 批量导入（含 20MiB/2560px 上限，ImportOutcome/ImportResult）
+    SidebarTreeAdapter.kt # 分组树侧栏适配器（CollectionEntry/CollectionNode/SidebarRow 平铺树）
     GifFrameDecoder.kt  # 自研最小 GIF 解码器（LZW/interlace/色板，与 Pillow 一致）
     GifEncoder.kt       # 自研最小 GIF 编码器（median cut 256 色 + LZW，与 GifFrameDecoder 严格对应）
     GifStego.kt         # STG3 隐写检测 + 7 模式解码 + encode 写入（FULL/LZMA/WebP 候选）+ 自研 PNG 编码
@@ -57,10 +59,10 @@ app/src/main/
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
     QuickTileService.kt # 控制中心快捷磁贴（TileService，点击打开主界面）
   res/
-    layout/activity_main.xml / activity_settings.xml / item_*
+    layout/activity_main.xml / activity_settings.xml / item_* / dialog_tag_editor.xml / dialog_add_collection.xml
     values/colors.xml   # 暗色配色（bg #0D0D0F、card #1E1E22、accent #3B82F6、muted #71717A）
     values/themes.xml   # Theme.OhMyMeme（含 values-night）
-    values/strings.xml  # 含 copy_mode_options / sync_type_options
+    values/strings.xml  # 含 copy_mode_options / sync_type_options / s3_addressing_options / s3_signature_options
 ```
 
 ## 存储布局（与桌面端对应）
@@ -88,7 +90,7 @@ Android/data/com.ohmymeme.app/
 - 单例：`MemeDb.get(context)`，用 `applicationContext` 防泄漏
 
 ### 配置（ConfigStore.kt）
-- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout` 等）
+- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"` 等）
 - `SECRET_KEYS` 6 个密钥字段（s3_access_key/s3_secret_key/r2_access_key_id/r2_secret_access_key/ftp_password/webdav_password）写入前加密、读取后解密
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
@@ -102,7 +104,8 @@ Android/data/com.ohmymeme.app/
 ### 导入（MemeImporter.kt）
 - 点击标题栏「导入」弹 `menu_import.xml` 菜单：从文件导入（`pickImages`，SAF `ACTION_OPEN_DOCUMENT` 多选）/ 从手机相册导入（`pickAlbumImages`：`isPhotoPickerAvailable` 为真走 Photo Picker `PickMultipleVisualMedia`，否则回退 `ACTION_GET_CONTENT` 相册，避免库默认回退文件选择器）/ 从手机QQ缓存导入（占位 Toast「开发中，后续用 Shizuku 获取文件」）
 - 两种导入共用 `doImport(uris)` → `MemeImporter.importUris`：逐文件：查哈希去重 → 魔数识别扩展名 → 拷贝到 `cache/{hash16}{ext}` → 读尺寸 → `addMeme`
-- 单文件失败不影响其余文件（catch 后继续）
+- **导入上限**（对齐桌面端 `config.py` `_IMPORT_MAX_BYTES`/`_IMPORT_MAX_PX`）：单文件 >20MiB（`MAX_BYTES`）或任一边 >2560px（`MAX_PX`）拒绝导入并计入 rejected（`ImportOutcome` 枚举：`OVER_LIMIT`/`INVALID`/`FAILED`/`DUPLICATE`/`OK`，`ImportResult` 汇总 imported/rejected/skipped/errors）；局域网拉取与云端 pull 复用 `MAX_BYTES` 校验
+- 单文件失败不影响其余文件（catch 后继续），结束 Toast 汇总成功/跳过/超限/失败数（`import_rejected`/`import_errors`）
 - **隐写 GIF 解码**（对应桌面端 `_try_decode_stego` + `gif_stego.py`）：GIF 且含 `STG3` 时 `GifStego.decode` 还原原图（7 种模式），只导入还原结果 `fromStego=1`，GIF 本身不入库；WebP 模式经 `AndroidGifDecoder.webpToRgba` 解码（反预乘 alpha）
 - `GifFrameDecoder` 为自研最小 GIF 解码器（GIF87a/89a、全局/局部色板、LZW、interlace、透明索引直映射 RGB、Pillow 一致的 `(R*299+G*587+B*114+500)/1000` 灰度），与 Pillow 逐字节一致；LZMA 用 `org.tukaani:xz`（`XZInputStream`）；PNG 输出用自研 RGBA 编码器
 - `CacheScanner` 不做 STG3 检测（对齐桌面端 `scan_cache`）
@@ -126,15 +129,28 @@ Android/data/com.ohmymeme.app/
 - 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
 ### 长按右键菜单（MainActivity.kt）
-- `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
+- `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 打标签 / 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
+- 「添加分组」走两段式 `promptAddCollection`（对齐桌面端 CollectionBuilder 的精简版）：`dialog_add_collection.xml` 输入新分组名创建，或从「加入已有分组」列表（仅 id>0 真实分组，`item_add_collection_row.xml`）点选即加入
 - 删除走 `deleteMemeFiles`：删物理文件（`Thumbnailer.findMemeFile`）+ 删 `{id}_*.png` 缩略图 + `deleteMeme` 删库，与桌面端一致
 - 设置页用 Activity Result API（`registerForActivityResult`，`settingsLauncher`）打开，返回 `RESULT_OK` 后 `reloadData()` 使配置（如动图开关）立即生效；导入/选目录/设置统一走 `ActivityResultContracts.StartActivityForResult`
 
 ### 分组胶囊过滤（MainActivity.kt）
-- 点击 `rv_collections` 胶囊过滤表情：分组单选切换（`activeCollectionId`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
+- 顶栏标签行（`rv_tags`）点击标签过滤表情：多选叠加（`activeTags`，全含匹配 `memeIdsWithAllTags`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
+- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
-- 分组栏含系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
+- 系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致
+
+### 标签系统（MainActivity.kt + MemeDb.kt）
+- 长按菜单「打标签」（`act_tag`）→ `promptEditTags(meme)`：`dialog_tag_editor.xml`（输入框 + `rv_tag_list` + 已选摘要），输入框实时过滤已有标签（`getAllTags`），点选/取消多选，回车把当前输入文本作为新标签加入，保存走 `setMemeTags`
+- `setMemeTags` 重写后新增孤儿标签清理（`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)`），对齐桌面端 `set_meme_tags` 的清理逻辑
+- 标签行过滤与分组/关键词叠加，全含匹配（`memeIdsWithAllTags(tags)` 逐标签 INTERSECT），对齐桌面端 `search_memes` 的 `tags` 参数
+
+### 整理模式（MainActivity.kt + MemeGridAdapter.kt）
+- 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除）**，对齐桌面端多选操作栏；与拖拽排序互斥（进入一个自动退出另一个）
+- 整理模式下：卡片显示勾选徽标（`tv_select_check`，`bg_select_check` 圆底 ✓），点击卡片切换选中（不走分享/记录最近使用），菜单按钮隐藏、拖拽手柄隐藏；底部操作栏 `manage_bar`（「已选 n 项 / 全选 / 取消 / 批量删除」，网格底部 padding 加大防遮挡）
+- 批量删除：`MemeGridAdapter.itemsByIds(ids)` 取 Meme → `deleteMemeFiles` 删物理文件与缩略图 → `MemeDb.deleteMemes(ids)` 单事务批量删（`id IN (...)`，外键 ON DELETE CASCADE 清理关联表 + 孤儿标签清理），对齐桌面端 `delete_memes`
+- 拖拽排序入口移至「更多」菜单 `act_toggle_drag_sort`（`toggleDragSort`），门控条件不变（`canOrderCards`）
 
 ### 小分组（子分组）
 - 对齐桌面端 `create_subcollection` + webui 顶栏：**仅 1 层**——`getCollectionDepth(parentId) >= 1` 时拒绝创建并提示「最多支持1层小分组」
@@ -151,7 +167,7 @@ Android/data/com.ohmymeme.app/
 - 取消收藏/移出最近使用后，若对应系统分组（收藏夹/最近使用）计数归零，自动退出该视图
 
 ### 拖拽排序（MainActivity.kt）
-- 无标题栏排序按钮或 `sortEnabled` 模式。仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
+- 「更多」菜单 `act_toggle_drag_sort` 开启拖拽排序（`toggleDragSort`），与整理模式互斥。仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
 - 搜索中，以及收藏夹 `-2`、最近使用 `-3`、未分类 `-4` 视图均隐藏手柄且不得重排
 - `ItemTouchHelper` 的 `SortCallback.isLongPressDragEnabled()` 返回 false。仅手柄按下后拖动可调用 `startDrag`；卡片主体点击继续分享，主体长按继续打开右键菜单
 - `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
@@ -161,6 +177,7 @@ Android/data/com.ohmymeme.app/
 - 桌面端 `updater.py` 迁移：`_parse_version` → `parseVersion`，`_pick_asset_url` → 遍历 assets 找 `.apk`
 - GitHub Releases API：`https://api.github.com/repos/OhMyMeme/OhMyMeme-Android/releases/latest`，repo 地址与桌面端不同（Android 仓库）
 - **两级回退**（对齐桌面端 `check_latest`）：先并发 `fetchFirst(GITHUB_LATEST)`（镜像+直连，`invokeAny`），404/失败时回退 `GITHUB_LIST`（`releases?per_page=5`）`pickHighestFromList` 取最高版本（无 `.apk` 资产时回退 release `html_url`）
+- **稳定版过滤**：`pickHighestFromList` 跳过 `draft`/`prerelease` 与 tag 含 `nightly`/`beta`/`rc` 的版本，只推送正式版
 - **并发抓取**：`fetchFirst` 把 4 镜像前缀 + 直连共 5 个 URL 并发 GET，`invokeAny` 等待首个真正成功（`fetchBody` 失败抛异常，避免早期修复中"null 被当作成功"导致直连没机会）；UA 伪造安卓 Chrome（`UA` 常量）
 - 版本比较：`parseVersion` 拆 `v0.1.0` 为 `[0,1,0]`，按位比较（`compareVersions`），大于当前 versionName 视为有更新
 - 安卓无法自动安装 APK：检测到新版本用 `AlertDialog` 引导，点击「下载」`ACTION_VIEW` 打开 APK `browser_download_url`（无 apk 资产时回退 release `html_url`）
@@ -172,11 +189,11 @@ Android/data/com.ohmymeme.app/
 - `SyncProgress` 线程安全计数类（`filesTotal`/`bytesTotal`/`report`/`done`/`bytesDone`/`currentFile`/`startTime`/`onProgress` 回调），worker 线程回调、UI 自行 `runOnUiThread`
 - 对齐桌面端 `sync.py` + `manifest.py`：远端目录 `memes/`（REMOTE_MEME_DIR）+ `meme-index.json`（INDEX_FILENAME，清单 version 3）；远端根：FTP→`ftp_path`、WebDAV→`webdav_path`、对象存储→空
 - 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）
-- 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置，AWS SigV4 手写签名，endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
+- 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置；**S3 兼容阿里云 OSS**：`signature_version="s3"` 走 SigV2 签名（HMAC-SHA1 + `Authorization: AWS ak:base64`，`signV2`），`addressing_style="virtual"` 走虚拟主机寻址 `https://bucket.endpoint/key`（`urlForKey`），默认即 V2+virtual（对齐桌面端 `config.py` 默认）；R2 强制 SigV4 + path 寻址不变；endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
 - `downloadIndex` 下载远端清单到 dataDir 临时文件再解析，失败清理；`writeTempIndex` 上传前写本地临时清单
 - `push`：本地清单与远端清单按 `filename+sha256` 比对，相同且远端文件存在则跳过；`sync_delete_remote` 时删除远端多余文件；成功后合并远端仍保留的孤儿项重建清单并上传；上传失败即抛 `SyncError` 不更新远端清单
 - **Backend 接口只接受真实 `File`**（`uploadFile(local: File)/downloadFile(remotePath, dest: File)` 三实现不变）；cache/thumbnails 在 SAF 模式下经 `StorFile` 读写，push 上传前 `StorFile.copyTo(context.cacheDir 临时文件)` 物化，pull 先下载到 `context.cacheDir` 临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除
-- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）
+- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（超限文件跳过并删除临时文件、空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）
 - 公开 API：`syncTest`（返回 "ok" 或错误信息）、`checkSyncStatus`（返回本地/远端计数与仅本地/仅远端文件名摘要）、`push`/`pull`（返回 `SyncResult(uploaded/downloaded/skipped/errors/deleted/removedLocal/failed)`，失败抛 `SyncError`）、`deleteAllRemote`、`deleteAllLocal`
 - 单线程顺序执行（安卓端不做多线程分片）；同步配置读 `ConfigStore`（密钥字段已解密）
 
@@ -195,7 +212,7 @@ Android/data/com.ohmymeme.app/
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
 - **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
-- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤64MB `MAX_FILE_SIZE`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序；任一检查不过即跳过计入 failed 且不落盘
+- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序；任一检查不过即跳过计入 failed 且不落盘
 - **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
@@ -234,19 +251,19 @@ Android/data/com.ohmymeme.app/
 - 单测：`GifEncoderTest`（256 色内逐字节精确、灰度精确、跨边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值与 FULL 全图 encode→decode 逐字节还原，FULL 用「极小 origBytes + 大差值」保证选中）
 
 ### 已实现
-- 主界面 / 设置页暗色 UI 复刻
+- 主界面 / 设置页暗色 UI 复刻 + 桌面端布局复刻（顶栏折叠按钮 + logo + 图标、搜索框独立一行、标签行、左侧常驻分组树侧栏 `rv_sidebar` 默认收起）
 - 存储层：路径、SQLite 数据库、JSON 配置 + 密钥加密
-- 缓存扫描、SAF 导入、缩略图生成
-- 搜索（关键词实时）+ 空状态切换
+- 缓存扫描、SAF 导入（20MiB/2560px 上限，ImportOutcome/ImportResult 汇总）、缩略图生成
+- 搜索（关键词实时）+ 标签行过滤（多选叠加，全含匹配）+ 空状态切换
 - 设置页保存/重置接真实配置
 - 首次运行存储位置选择
-- 版本更新检查（GitHub Releases API）
+- 版本更新检查（GitHub Releases API，列表路径跳过 draft/prerelease/nightly/beta/rc 只推正式版）
 - GIF 动图播放（`auto_play_gif` 开关控制，WebP 动图亦支持）
-- 长按右键菜单（重命名/收藏/添加分组/从最近使用中删除/删除）
+- 长按右键菜单（重命名/收藏/打标签/添加分组（两段式）/从最近使用中删除/删除）
 - 表情网格间距（卡片 5dp 外边距）
 - 更新下载镜像源回退（github.dpik.top 等 4 个镜像 + 直连）
-- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿）
-- 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses，最近使用分组自动刷新
+- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿；S3 兼容阿里云 OSS：V2 签名 + 虚拟主机寻址，设置页可切换 V4/AWS 标准）
+- 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses（受 `record_recent_use` 开关控制），最近使用分组自动刷新
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
 - 顶部快捷同步：主界面标题栏「更多」菜单提供上传/下载，一键 push/pull
@@ -255,7 +272,9 @@ Android/data/com.ohmymeme.app/
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
-- 拖拽排序：无标题栏开关；仅在空搜索、全局或正数真实分组且至少 2 张卡片时，由卡片左上手柄启动。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
+- 标签系统：`promptEditTags` 对话框搜索/点选/回车新建标签，`setMemeTags` 孤儿标签清理；标签行多选叠加过滤（`memeIdsWithAllTags`），对齐桌面端 TagEditor + App.vue 标签栏
+- 整理模式（多选批量删除）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除」，`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；与拖拽排序互斥
+- 拖拽排序：「更多」菜单开启；仅在空搜索、全局或正数真实分组且至少 2 张卡片时，由卡片左上手柄启动。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
 - 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`

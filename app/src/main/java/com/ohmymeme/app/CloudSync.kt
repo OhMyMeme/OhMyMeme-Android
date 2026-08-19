@@ -389,6 +389,11 @@ object CloudSync {
         private val awsTimestamp = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US).apply {
             timeZone = java.util.TimeZone.getTimeZone("UTC")
         }
+        private val awsHttpDate = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("GMT")
+        }
+        private var addressingStyle = "virtual"
+        private var signatureVersion = "s3"
 
         override fun connect() {
             if (isR2) {
@@ -410,6 +415,15 @@ object CloudSync {
                 prefix = cfg.optString("s3_path", "").trim('/')
             }
             if (region.isEmpty()) region = "us-east-1"
+            if (isR2) {
+                addressingStyle = "path"
+                signatureVersion = "s3v4"
+            } else {
+                addressingStyle = cfg.optString("s3_addressing_style", "virtual")
+                if (addressingStyle !in setOf("virtual", "path")) addressingStyle = "virtual"
+                signatureVersion = cfg.optString("s3_signature_version", "s3")
+                if (signatureVersion !in setOf("s3", "s3v4")) signatureVersion = "s3"
+            }
         }
 
         override fun testConnection() {}
@@ -437,7 +451,13 @@ object CloudSync {
         private fun urlForKey(key: String): String {
             val base = endpoint.trimEnd('/')
             val encoded = key.split("/").joinToString("/") { encodeSegment(it) }
-            return "$base/$bucket/$encoded"
+            return if (isR2 || addressingStyle == "path") {
+                "$base/$bucket/$encoded"
+            } else {
+                val scheme = base.substringBefore("://") + "://"
+                val host = base.substringAfter("://").substringBefore("/")
+                "$scheme$bucket.$host/$encoded"
+            }
         }
 
         private fun hmac(key: ByteArray, data: String): ByteArray {
@@ -451,7 +471,11 @@ object CloudSync {
             return md.digest(data).joinToString("") { "%02x".format(it) }
         }
 
-        private fun sign(method: String, url: String): HttpURLConnection {
+        private fun sign(method: String, url: String, contentType: String? = null): HttpURLConnection {
+            return if (signatureVersion == "s3v4") signV4(method, url) else signV2(method, url, contentType)
+        }
+
+        private fun signV4(method: String, url: String): HttpURLConnection {
             val u = URL(url)
             val host = u.host
             val path = if (u.path.isEmpty()) "/" else u.path
@@ -490,11 +514,37 @@ object CloudSync {
             return conn
         }
 
+        /** 阿里云 OSS 等 V2 签名（对齐桌面端 boto3 signature_version="s3"） */
+        private fun signV2(method: String, url: String, contentType: String?): HttpURLConnection {
+            val u = URL(url)
+            val host = u.host
+            val now = java.util.Date()
+            val date = awsHttpDate.format(now)
+            val amzDate = awsTimestamp.format(now)
+            val canonicalizedAmzHeaders = "x-amz-date:$amzDate\n"
+            val canonicalizedResource =
+                if (isR2 || addressingStyle == "path") u.path else "/$bucket${u.path}"
+            val stringToSign = "$method\n\n${contentType.orEmpty()}\n$date\n$canonicalizedAmzHeaders$canonicalizedResource"
+            val mac = Mac.getInstance("HmacSHA1")
+            mac.init(SecretKeySpec(secretKey.toByteArray(Charsets.UTF_8), "HmacSHA1"))
+            val signature = java.util.Base64.getEncoder()
+                .encodeToString(mac.doFinal(stringToSign.toByteArray(Charsets.UTF_8)))
+            val conn = u.openConnection() as HttpURLConnection
+            conn.requestMethod = method
+            conn.connectTimeout = 30000
+            conn.readTimeout = 60000
+            conn.setRequestProperty("Host", host)
+            conn.setRequestProperty("Date", date)
+            conn.setRequestProperty("x-amz-date", amzDate)
+            conn.setRequestProperty("Authorization", "AWS $accessKey:$signature")
+            return conn
+        }
+
         override fun ensureRemoteDir(path: String) {}
 
         override fun uploadFile(local: File, remotePath: String): Boolean {
             return try {
-                val conn = sign("PUT", urlForKey(key(remotePath)))
+                val conn = sign("PUT", urlForKey(key(remotePath)), "application/octet-stream")
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/octet-stream")
                 conn.setFixedLengthStreamingMode(local.length())
@@ -614,7 +664,9 @@ object CloudSync {
         private var timeout = 30
 
         /** 简单 HTTP/1.1 响应：状态码 + 响应体字节 */
-        private class DavResponse(val code: Int, val body: ByteArray)        override fun connect() {
+        private class DavResponse(val code: Int, val body: ByteArray)
+
+        override fun connect() {
             val url = cfg.optString("webdav_url", "")
             if (url.isEmpty()) throw SyncError("WebDAV url not configured")
             val u = URL(url)
@@ -1347,11 +1399,22 @@ object CloudSync {
                     failed.add(fname)
                     progress?.report(0, fname)
                 } else if (ok) {
-                    val mime = "image/${fname.substringAfterLast('.', "png").lowercase()}"
-                    val dst = cacheDir.createFile(fname, mime)
-                    dst.writeFrom(tmp)
-                    done++
-                    progress?.report(tmp.length(), fname)
+                    val fsize = tmp.length()
+                    val opts = android.graphics.BitmapFactory.Options()
+                    opts.inJustDecodeBounds = true
+                    android.graphics.BitmapFactory.decodeFile(tmp.absolutePath, opts)
+                    val dims = Pair(opts.outWidth, opts.outHeight)
+                    if (fsize > MemeImporter.MAX_BYTES || maxOf(dims.first, dims.second) > MemeImporter.MAX_PX) {
+                        // 超限文件不接收：删除临时文件并跳过（不写入缓存/清单），对齐桌面端 sync.py
+                        android.util.Log.i(TAG, "pull skip (over limit): $fname")
+                        progress?.report(0, fname)
+                    } else {
+                        val mime = "image/${fname.substringAfterLast('.', "png").lowercase()}"
+                        val dst = cacheDir.createFile(fname, mime)
+                        dst.writeFrom(tmp)
+                        done++
+                        progress?.report(tmp.length(), fname)
+                    }
                 } else {
                     errors++
                     failed.add(fname)
