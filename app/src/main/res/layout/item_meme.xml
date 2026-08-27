@@ -60,6 +60,21 @@
             android:visibility="gone" />
 
         <TextView
+            android:id="@+id/tv_select_check"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="top|start"
+            android:layout_marginStart="6dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_select_check"
+            android:gravity="center"
+            android:text="✓"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
             android:id="@+id/btn_meme_menu"
             android:layout_width="26dp"
             android:layout_height="26dp"

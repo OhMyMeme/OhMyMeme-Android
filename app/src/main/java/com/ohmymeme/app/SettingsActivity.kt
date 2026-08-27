@@ -94,6 +94,16 @@ class SettingsActivity : AppCompatActivity() {
                 override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
         }
+
+        val addrAdapter = ArrayAdapter.createFromResource(
+            this, R.array.s3_addressing_options, android.R.layout.simple_spinner_dropdown_item
+        )
+        findViewById<Spinner>(R.id.sp_s3_addressing).adapter = addrAdapter
+
+        val sigAdapter = ArrayAdapter.createFromResource(
+            this, R.array.s3_signature_options, android.R.layout.simple_spinner_dropdown_item
+        )
+        findViewById<Spinner>(R.id.sp_s3_signature).adapter = sigAdapter
     }
 
     private fun toggleSyncType(position: Int) {
@@ -143,6 +153,14 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<SwitchMaterial>(R.id.sw_gif).isChecked = cfg.optBoolean("auto_play_gif", true)
         findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked =
             cfg.optBoolean("show_uncategorized", true)
+        findViewById<SwitchMaterial>(R.id.sw_record_recent).isChecked =
+            cfg.optBoolean("record_recent_use", true)
+        findViewById<Spinner>(R.id.sp_s3_addressing).setSelection(
+            if (cfg.optString("s3_addressing_style", "virtual") == "path") 1 else 0
+        )
+        findViewById<Spinner>(R.id.sp_s3_signature).setSelection(
+            if (cfg.optString("s3_signature_version", "s3") == "s3v4") 1 else 0
+        )
         findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 1))
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
@@ -718,6 +736,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun saveConfig() {
         ConfigStore.set(this, "auto_play_gif", findViewById<SwitchMaterial>(R.id.sw_gif).isChecked)
         ConfigStore.set(this, "show_uncategorized", findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked)
+        ConfigStore.set(this, "record_recent_use", findViewById<SwitchMaterial>(R.id.sw_record_recent).isChecked)
         ConfigStore.set(this, "copy_resize_mode", findViewById<Spinner>(R.id.sp_copy_mode).selectedItemPosition)
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
@@ -741,6 +760,10 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "s3_access_key", textOf(R.id.et_s3_access))
         ConfigStore.set(this, "s3_secret_key", textOf(R.id.et_s3_secret))
         ConfigStore.set(this, "s3_path", textOf(R.id.et_s3_path))
+        ConfigStore.set(this, "s3_addressing_style",
+            if (findViewById<Spinner>(R.id.sp_s3_addressing).selectedItemPosition == 1) "path" else "virtual")
+        ConfigStore.set(this, "s3_signature_version",
+            if (findViewById<Spinner>(R.id.sp_s3_signature).selectedItemPosition == 1) "s3v4" else "s3")
         ConfigStore.set(this, "r2_account_id", textOf(R.id.et_r2_account))
         ConfigStore.set(this, "r2_access_key_id", textOf(R.id.et_r2_access))
         ConfigStore.set(this, "r2_secret_access_key", textOf(R.id.et_r2_secret))

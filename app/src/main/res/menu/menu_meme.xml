@@ -7,6 +7,9 @@
         android:id="@+id/act_favorite"
         android:title="@string/ctx_favorite" />
     <item
+        android:id="@+id/act_tag"
+        android:title="@string/ctx_tag" />
+    <item
         android:id="@+id/act_add_collection"
         android:title="@string/ctx_add_collection" />
     <item

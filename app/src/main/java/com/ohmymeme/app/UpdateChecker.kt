@@ -126,6 +126,11 @@ object UpdateChecker {
             val rel = arr.optJSONObject(i) ?: continue
             val tag = rel.optString("tag_name", "")
             if (tag.isEmpty()) continue
+            if (rel.optBoolean("draft", false) || rel.optBoolean("prerelease", false)) continue
+            if (tag.contains("nightly", ignoreCase = true) ||
+                tag.contains("beta", ignoreCase = true) ||
+                tag.contains("rc", ignoreCase = true)
+            ) continue
             val ver = parseVersion(tag)
             if (bestTag.isEmpty() || compareVersions(ver, bestVer) > 0) {
                 bestTag = tag
