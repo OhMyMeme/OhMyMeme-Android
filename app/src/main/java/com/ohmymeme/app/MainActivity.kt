@@ -413,18 +413,6 @@ class MainActivity : AppCompatActivity() {
         reloadData()
     }
 
-    private fun toggleDragSort() {
-        sortModeEnabled = !sortModeEnabled
-        if (sortModeEnabled && manageMode) {
-            manageMode = false
-            selectedIds.clear()
-            findViewById<ImageView>(R.id.btn_sort_mode).setColorFilter(getColor(R.color.muted))
-            updateManageBar()
-        }
-        toast(getString(if (sortModeEnabled) R.string.drag_sort_on else R.string.drag_sort_off))
-        reloadData()
-    }
-
     private fun updateManageBar() {
         val bar = findViewById<View>(R.id.manage_bar)
         if (!manageMode) {
@@ -438,9 +426,12 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btn_manage_cancel).setOnClickListener {
             selectedIds.clear()
             updateManageBar()
-            (findViewById<RecyclerView>(R.id.rv_memes).adapter)?.notifyDataSetChanged()
+            (findViewById<RecyclerView>(R.id.rv_memes).adapter)?.let { a ->
+                a.notifyItemRangeChanged(0, a.itemCount)
+            }
         }
         findViewById<View>(R.id.btn_manage_delete).setOnClickListener { batchDelete() }
+        findViewById<View>(R.id.btn_manage_add_collection).setOnClickListener { batchAddToCollection() }
     }
 
     private fun selectAll() {
@@ -449,14 +440,18 @@ class MainActivity : AppCompatActivity() {
         selectedIds.clear()
         selectedIds.addAll(all)
         updateManageBar()
-        adapter.notifyDataSetChanged()
+        adapter.notifyItemRangeChanged(0, adapter.itemCount)
     }
 
-    private fun toggleSelect(meme: Meme) {
+    private fun toggleSelect(meme: Meme, pos: Int = -1) {
         if (selectedIds.contains(meme.id)) selectedIds.remove(meme.id)
         else selectedIds.add(meme.id)
         updateManageBar()
-        findViewById<RecyclerView>(R.id.rv_memes).adapter?.notifyDataSetChanged()
+        if (pos >= 0) {
+            findViewById<RecyclerView>(R.id.rv_memes).adapter?.notifyItemChanged(pos)
+        } else {
+            findViewById<RecyclerView>(R.id.rv_memes).adapter?.notifyDataSetChanged()
+        }
     }
 
     private fun batchDelete() {
@@ -490,6 +485,66 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    private fun batchAddToCollection() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) {
+            toast(getString(R.string.manage_delete_empty))
+            return
+        }
+        val view = layoutInflater.inflate(R.layout.dialog_add_collection, null)
+        val input = view.findViewById<EditText>(R.id.et_new_collection)
+        val list = view.findViewById<RecyclerView>(R.id.rv_existing_collections)
+        list.layoutManager = LinearLayoutManager(this)
+        executor.execute {
+            val existing = MemeDb.get(this).getCollections()
+                .filter { it.id > 0 }
+                .map { CollectionEntry(it.id, it.name, 0) }
+            runOnUiThread {
+                val dialog = AlertDialog.Builder(this)
+                    .setTitle(R.string.manage_add_to_collection)
+                    .setView(view)
+                    .setPositiveButton(R.string.create_group) { _, _ ->
+                        val name = input.text.toString().trim()
+                        if (name.isEmpty()) {
+                            toast(getString(R.string.input_empty))
+                            return@setPositiveButton
+                        }
+                        executor.execute {
+                            val db = MemeDb.get(this)
+                            val cid = db.createCollection(name)
+                            ids.forEach { mid -> db.addToCollection(mid, cid) }
+                            runOnUiThread {
+                                toast(getString(R.string.manage_added_to_collection, ids.size, name))
+                                selectedIds.clear()
+                                manageMode = false
+                                findViewById<ImageView>(R.id.btn_sort_mode).setColorFilter(getColor(R.color.muted))
+                                updateManageBar()
+                                reloadData()
+                            }
+                        }
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+                list.adapter = ExistingCollectionAdapter(existing).apply {
+                    onItemClick = { entry ->
+                        dialog.dismiss()
+                        executor.execute {
+                            ids.forEach { mid -> MemeDb.get(this@MainActivity).addToCollection(mid, entry.id) }
+                            runOnUiThread {
+                                toast(getString(R.string.manage_added_to_collection, ids.size, entry.name))
+                                selectedIds.clear()
+                                manageMode = false
+                                findViewById<ImageView>(R.id.btn_sort_mode).setColorFilter(getColor(R.color.muted))
+                                updateManageBar()
+                                reloadData()
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun toggleSidebarRow(row: SidebarRow) {
@@ -763,10 +818,10 @@ class MainActivity : AppCompatActivity() {
                     rv.setPadding(12, 12, 12, if (manageMode) 76 else 12)
                     (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
                     rv.setTag(R.id.tag_sort_helper, null)
-                    val canOrder = sortModeEnabled && canOrderCards(keyword, collectionId, memes.size)
+                    val canOrder = (manageMode || sortModeEnabled) && memes.size >= 2
                     val adapter = MemeGridAdapter(this, memes, canOrder, manageMode, selectedIds).apply {
                         onItemClick = { _, meme -> onMemeClick(meme) }
-                        onSelectToggle = { meme -> toggleSelect(meme) }
+                        onSelectToggle = { meme, pos -> toggleSelect(meme, pos) }
                         onMenuClick = { anchor, meme -> showMemeMenu(anchor, meme) }
                         onDragStart = { view, meme -> startGlobalDrag(view, meme) }
                         onDragFailed = { anchor, meme -> showMemeMenu(anchor, meme) }
@@ -942,7 +997,9 @@ class MainActivity : AppCompatActivity() {
         val list = view.findViewById<RecyclerView>(R.id.rv_existing_collections)
         list.layoutManager = LinearLayoutManager(this)
         executor.execute {
-            val existing = MemeDb.get(this).getCollections().filter { it.id > 0 }
+            val existing = MemeDb.get(this).getCollections()
+                .filter { it.id > 0 }
+                .map { CollectionEntry(it.id, it.name, 0) }
             runOnUiThread {
                 val dialog = AlertDialog.Builder(this)
                     .setTitle(R.string.add_collection_dialog_title)
@@ -1100,7 +1157,6 @@ class MainActivity : AppCompatActivity() {
         popup.menuInflater.inflate(R.menu.menu_more_actions, popup.menu)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.act_toggle_drag_sort -> toggleDragSort()
                 R.id.act_sync_push -> quickSync(isUpload = true)
                 R.id.act_sync_pull -> quickSync(isUpload = false)
                 R.id.act_refresh -> rescanCache()
@@ -1219,20 +1275,17 @@ class MainActivity : AppCompatActivity() {
 
     private inner class ExistingCollectionAdapter(
         private val items: List<CollectionEntry>
-    ) : RecyclerView.Adapter<ExistingCollectionAdapter.Holder>() {
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
         var onItemClick: ((CollectionEntry) -> Unit)? = null
 
-        class Holder(itemView: View) : RecyclerView.ViewHolder(itemView)
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            return Holder(
-                LayoutInflater.from(parent.context)
-                    .inflate(R.layout.item_add_collection_row, parent, false)
-            )
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_add_collection_row, parent, false)
+            return object : RecyclerView.ViewHolder(view) {}
         }
 
-        override fun onBindViewHolder(holder: Holder, position: Int) {
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val entry = items[position]
             holder.itemView.findViewById<TextView>(R.id.tv_existing_collection_name).text = entry.name
             holder.itemView.setOnClickListener { onItemClick?.invoke(entry) }
@@ -1244,19 +1297,16 @@ class MainActivity : AppCompatActivity() {
     private inner class TagChoiceAdapter(
         private val tags: List<String>,
         private val selected: Set<String>
-    ) : RecyclerView.Adapter<TagChoiceAdapter.Holder>() {
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
         var onItemClick: ((String) -> Unit)? = null
 
-        class Holder(itemView: View) : RecyclerView.ViewHolder(itemView)
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            return Holder(
-                LayoutInflater.from(parent.context).inflate(R.layout.item_tag_check, parent, false)
-            )
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_tag_check, parent, false)
+            return object : RecyclerView.ViewHolder(view) {}
         }
 
-        override fun onBindViewHolder(holder: Holder, position: Int) {
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val tag = tags[position]
             val tv = holder.itemView.findViewById<TextView>(R.id.tv_tag_check)
             val active = selected.contains(tag)

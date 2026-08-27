@@ -197,6 +197,8 @@ object LanClient {
             }
         }
         CloudSync.applyRemoteOrder(context, manifest)
+        CloudSync.applyRemoteCollections(context, manifest)
+        CloudSync.applyRemoteTags(context, manifest)
         android.util.Log.d(TAG, "lan pull done pulled=$pulled skipped=$skipped errors=$errors")
         return LanResult(pulled = pulled, skipped = skipped, errors = errors, failed = failed)
     }

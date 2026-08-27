@@ -102,6 +102,7 @@ object CloudSync {
     internal fun buildManifest(ctx: Context): JSONObject {
         val db = MemeDb.get(ctx)
         val memes = JSONArray()
+        val tagMap = JSONObject()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
             val entry = JSONObject()
                 .put("filename", m.filename)
@@ -113,11 +114,18 @@ object CloudSync {
                 entry.put("mtime", (cacheFile.lastModified / 1000).toString())
             }
             memes.put(entry)
+            val tags = db.getMemeTags(m.id)
+            if (tags.isNotEmpty()) {
+                val arr = JSONArray()
+                tags.forEach { arr.put(it) }
+                tagMap.put(m.filename, arr)
+            }
         }
         val data = JSONObject()
             .put("version", MANIFEST_VERSION)
             .put("memes", memes)
             .put("collections", buildCollectionTree(ctx, null))
+        if (tagMap.length() > 0) data.put("tag_map", tagMap)
         return data
     }
 
@@ -1529,15 +1537,20 @@ object CloudSync {
         return tmp
     }
 
-    private fun applyRemoteCollections(ctx: Context, data: JSONObject) {
+    internal fun applyRemoteCollections(ctx: Context, data: JSONObject) {
         val db = MemeDb.get(ctx)
         val arr = data.optJSONArray("collections")
         if (arr == null) return
+        applyRemoteCollectionNodes(ctx, arr, null)
+    }
+
+    private fun applyRemoteCollectionNodes(ctx: Context, arr: JSONArray, parentId: Long?) {
+        val db = MemeDb.get(ctx)
         for (i in 0 until arr.length()) {
             val node = arr.optJSONObject(i) ?: continue
             val name = node.optString("name", "")
             if (name.isEmpty()) continue
-            val cid = db.createCollection(name)
+            val cid = db.createCollection(name, parentId)
             if (cid < 0) continue
             val fnames = node.optJSONArray("filenames")
             if (fnames != null) {
@@ -1547,6 +1560,25 @@ object CloudSync {
                     if (row != null) db.addToCollection(row.id, cid)
                 }
             }
+            val children = node.optJSONArray("children")
+            if (children != null && children.length() > 0) {
+                applyRemoteCollectionNodes(ctx, children, cid)
+            }
+        }
+    }
+
+    internal fun applyRemoteTags(ctx: Context, data: JSONObject) {
+        val db = MemeDb.get(ctx)
+        val tagMap = data.optJSONObject("tag_map") ?: return
+        for (filename in tagMap.keys()) {
+            val row = db.getByFilename(filename) ?: continue
+            val tagsArr = tagMap.optJSONArray(filename) ?: continue
+            val tags = mutableListOf<String>()
+            for (i in 0 until tagsArr.length()) {
+                val t = tagsArr.optString(i, "").trim()
+                if (t.isNotEmpty()) tags.add(t)
+            }
+            if (tags.isNotEmpty()) db.setMemeTags(row.id, tags)
         }
     }
 

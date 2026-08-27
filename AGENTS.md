@@ -147,8 +147,8 @@ Android/data/com.ohmymeme.app/
 - 标签行过滤与分组/关键词叠加，全含匹配（`memeIdsWithAllTags(tags)` 逐标签 INTERSECT），对齐桌面端 `search_memes` 的 `tags` 参数
 
 ### 整理模式（MainActivity.kt + MemeGridAdapter.kt）
-- 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除）**，对齐桌面端多选操作栏；与拖拽排序互斥（进入一个自动退出另一个）
-- 整理模式下：卡片显示勾选徽标（`tv_select_check`，`bg_select_check` 圆底 ✓），点击卡片切换选中（不走分享/记录最近使用），菜单按钮隐藏、拖拽手柄隐藏；底部操作栏 `manage_bar`（「已选 n 项 / 全选 / 取消 / 批量删除」，网格底部 padding 加大防遮挡）
+- 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除 + 拖拽排序共存）**，对齐桌面端多选操作栏
+- 整理模式下：卡片显示勾选徽标（`tv_select_check`，`bg_select_check` 圆底 ✓），点击卡片切换选中（不走分享/记录最近使用），菜单按钮隐藏；**拖拽 handle 始终可见可拖拽**（`canOrder = manageMode || sortModeEnabled`），tap=选中/handle=排序共存；底部操作栏 `manage_bar`（「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组」，网格底部 padding 加大防遮挡）
 - 批量删除：`MemeGridAdapter.itemsByIds(ids)` 取 Meme → `deleteMemeFiles` 删物理文件与缩略图 → `MemeDb.deleteMemes(ids)` 单事务批量删（`id IN (...)`，外键 ON DELETE CASCADE 清理关联表 + 孤儿标签清理），对齐桌面端 `delete_memes`
 - 拖拽排序入口移至「更多」菜单 `act_toggle_drag_sort`（`toggleDragSort`），门控条件不变（`canOrderCards`）
 
@@ -167,7 +167,8 @@ Android/data/com.ohmymeme.app/
 - 取消收藏/移出最近使用后，若对应系统分组（收藏夹/最近使用）计数归零，自动退出该视图
 
 ### 拖拽排序（MainActivity.kt）
-- 「更多」菜单 `act_toggle_drag_sort` 开启拖拽排序（`toggleDragSort`），与整理模式互斥。仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
+- 拖拽排序已融入整理模式：整理模式下拖拽 handle 始终可见可拖拽，tap=选中，handle=排序，共存不互斥
+- 仅当关键词为空、当前为全局视图或正数真实分组，且网格至少有 2 张卡片时，卡片左上拖拽手柄显示并允许排序
 - 搜索中，以及收藏夹 `-2`、最近使用 `-3`、未分类 `-4` 视图均隐藏手柄且不得重排
 - `ItemTouchHelper` 的 `SortCallback.isLongPressDragEnabled()` 返回 false。仅手柄按下后拖动可调用 `startDrag`；卡片主体点击继续分享，主体长按继续打开右键菜单
 - `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
@@ -212,8 +213,8 @@ Android/data/com.ohmymeme.app/
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
 - **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
-- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序；任一检查不过即跳过计入 failed 且不落盘
-- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组
+- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序 → `CloudSync.applyRemoteCollections` 同步分组（递归子集合）→ `CloudSync.applyRemoteTags` 同步标签；任一检查不过即跳过计入 failed 且不落盘
+- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签（`buildManifest` 含 `tag_map` 字段）
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
 - **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
@@ -273,12 +274,12 @@ Android/data/com.ohmymeme.app/
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
 - 标签系统：`promptEditTags` 对话框搜索/点选/回车新建标签，`setMemeTags` 孤儿标签清理；标签行多选叠加过滤（`memeIdsWithAllTags`），对齐桌面端 TagEditor + App.vue 标签栏
-- 整理模式（多选批量删除）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除」，`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；与拖拽排序互斥
-- 拖拽排序：「更多」菜单开启；仅在空搜索、全局或正数真实分组且至少 2 张卡片时，由卡片左上手柄启动。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
+- 整理模式（多选批量删除）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组」，`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；整理模式下拖拽 handle 始终可见可拖拽，tap=选中/handle=排序共存
+- 拖拽排序：已融入整理模式。仅在空搜索、全局或正数真实分组且至少 2 张卡片时，卡片左上手柄显示并允许排序。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
 - 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
-- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）
+- 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）；拉取后同步分组（递归子集合）+ 标签
 - 「未分类」分组：顶栏胶囊显示未加入任何分组的表情（虚拟分组 `-4`，`MemeDb.search`/`count` 的 `uncategorizedOnly` 参数对应桌面端 `uncategorized_only`），计数 > 0 才显示、清零自动隐藏并退出视图；负数 id 使拖拽排序/长按分组菜单自动禁用；`CloudSync` 清单仅遍历真实 `collections` 表不受影响；设置页「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py`/`settings.html`）
 - 控制中心快捷按钮：`QuickTileService`（`TileService`，manifest 声明 `BIND_QUICK_SETTINGS_TILE` + `quick_settings_tile.xml` 磁贴图标 `ic_qs_tile`），`onClick` 打开 MainActivity（锁屏先 `unlockAndRun`）；设置页「快捷开关」区块 + 「添加到控制中心」按钮弹添加指引（系统磁贴需用户在快捷设置编辑面板手动添加）
 - 长按拖拽发送（相册式）：`MemeGridAdapter` 长按卡片直接回调 `onDragStart` → `MainActivity.startGlobalDrag`：`materializeDragFile`（SAF 先 `stor.copyTo(cacheDir)` 物化，统一临时文件路径）→ `FileProvider.getUriForFile` → `ClipData.newUri` → `itemView.startDragAndDrop(DRAG_FLAG_GLOBAL or DRAG_FLAG_GLOBAL_URI_READ)` 跨应用拖入微信/QQ，同时 `recordUse`；`ACTION_DRAG_ENDED` 且未被接收（`!e.result`）时回调 `onDragFailed` 弹原右键菜单兜底；卡片右上角 `btn_meme_menu`（「⋯」）点击回调 `onMenuClick` 打开 `showMemeMenu`；注意鸿蒙/Huawei 上 `TYPE_APPLICATION_OVERLAY` 无法发起全局拖拽，因此拖拽必须由 Activity 窗口内的视图发起（曾用悬浮窗方案失败后改为相册式）；跨应用拖拽需真机验证（接收方是否支持图片拖放，失败有菜单兜底）

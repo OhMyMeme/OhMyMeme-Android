@@ -259,6 +259,8 @@
     <string name="manage_batch_confirm">确定删除选中的 %1$d 个表情包吗？此操作不可恢复。</string>
     <string name="manage_delete_done">已删除 %1$d 个表情包</string>
     <string name="manage_delete_empty">请先选择表情包</string>
+    <string name="manage_add_to_collection">加入分组</string>
+    <string name="manage_added_to_collection">已将 %1$d 个表情加入分组：%2$s</string>
 
     <string name="btn_reset">恢复默认</string>
     <string name="btn_save">保存</string>

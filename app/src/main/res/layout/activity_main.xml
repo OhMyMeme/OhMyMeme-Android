@@ -238,6 +238,19 @@
                     android:text="@string/manage_delete"
                     android:textColor="@color/danger"
                     android:textSize="12.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_manage_add_collection"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_title_btn"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="@string/manage_add_to_collection"
+                    android:textColor="@color/accent"
+                    android:textSize="12.5sp" />
             </LinearLayout>
         </FrameLayout>
     </LinearLayout>

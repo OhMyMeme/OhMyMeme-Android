@@ -27,7 +27,7 @@ class MemeGridAdapter(
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     var onItemClick: ((View, Meme) -> Unit)? = null
-    var onSelectToggle: ((Meme) -> Unit)? = null
+    var onSelectToggle: ((Meme, Int) -> Unit)? = null
     var onMenuClick: ((View, Meme) -> Unit)? = null
     var onDragStart: ((View, Meme) -> Unit)? = null
     var onDragFailed: ((View, Meme) -> Unit)? = null
@@ -65,7 +65,7 @@ class MemeGridAdapter(
         img.tag = meme.id
         name.text = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
         holder.itemView.setOnClickListener {
-            if (manageMode) onSelectToggle?.invoke(meme) else onItemClick?.invoke(it, meme)
+            if (manageMode) onSelectToggle?.invoke(meme, holder.bindingAdapterPosition) else onItemClick?.invoke(it, meme)
         }
         holder.itemView.setOnLongClickListener {
             if (manageMode) {
@@ -88,9 +88,9 @@ class MemeGridAdapter(
         menuButton.setOnLongClickListener { true }
         selectCheck.visibility =
             if (manageMode && selectedIds.contains(meme.id)) View.VISIBLE else View.GONE
-        dragHandle.visibility = if (canOrder) View.VISIBLE else View.GONE
+        dragHandle.visibility = if (canOrder || manageMode) View.VISIBLE else View.GONE
         dragHandle.setOnTouchListener(null)
-        if (canOrder) {
+        if (canOrder || manageMode) {
             dragHandle.setOnTouchListener { _, event ->
                 if (event.action != MotionEvent.ACTION_DOWN) return@setOnTouchListener true
                 if (holder.bindingAdapterPosition == RecyclerView.NO_POSITION) {
