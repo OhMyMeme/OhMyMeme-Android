@@ -38,6 +38,10 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".SetupGuideActivity"
+            android:exported="false" />
+
         <service
             android:name=".QuickTileService"
             android:exported="true"

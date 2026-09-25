@@ -1,5 +1,6 @@
 package com.ohmymeme.app
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -19,6 +20,25 @@ object UpdateChecker {
     private const val GITHUB_LIST = "https://api.github.com/repos/$REPO/releases?per_page=5"
     private const val UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+    private const val PREFS = "update_check"
+    private const val KEY_LAST_CHECK = "last_check_ms"
+    private const val CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
+
+    /** 距上次检查不足 24h 时跳过（对齐桌面端启动检查节流） */
+    fun shouldCheck(context: Context): Boolean {
+        val last = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_LAST_CHECK, 0)
+        return System.currentTimeMillis() - last >= CHECK_INTERVAL_MS
+    }
+
+    /** 检查发起即打点，网络失败也不在 24h 内反复重试 */
+    fun markChecked(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_LAST_CHECK, System.currentTimeMillis())
+            .apply()
+    }
 
     private val GH_MIRRORS = listOf(
         "https://github.dpik.top/",

@@ -3,6 +3,68 @@ package com.ohmymeme.app
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import java.text.Collator
+import java.util.Locale
+
+// 分组名自然排序键：对齐桌面端 database.py _name_sort_key——数字段按整数（2,10 而非 1,10,200），
+// 其余段按拼音（Collator/ICU，环境无中文排序时退回原串小写）
+object NameSorter {
+    private val DIGIT = Regex("\\d+")
+    private val collator: Collator? = try {
+        Collator.getInstance(Locale.CHINA)
+    } catch (_: Exception) {
+        null
+    }
+
+    private class Token(val text: String, val digits: Boolean)
+
+    private fun tokenize(s: String): List<Token> {
+        val out = mutableListOf<Token>()
+        var last = 0
+        for (m in DIGIT.findAll(s)) {
+            if (m.range.first > last) out.add(Token(s.substring(last, m.range.first), false))
+            out.add(Token(m.value, true))
+            last = m.range.last + 1
+        }
+        if (last < s.length) out.add(Token(s.substring(last), false))
+        return out
+    }
+
+    private fun compareNumeric(a: String, b: String): Int {
+        val x = a.trimStart('0').ifEmpty { "0" }
+        val y = b.trimStart('0').ifEmpty { "0" }
+        if (x.length != y.length) return x.length - y.length
+        return x.compareTo(y)
+    }
+
+    private fun compareText(a: String, b: String): Int {
+        val la = a.lowercase(Locale.ROOT)
+        val lb = b.lowercase(Locale.ROOT)
+        return collator?.compare(la, lb) ?: la.compareTo(lb)
+    }
+
+    fun compare(a: String, b: String): Int {
+        val ta = tokenize(a)
+        val tb = tokenize(b)
+        val n = minOf(ta.size, tb.size)
+        for (i in 0 until n) {
+            val x = ta[i]
+            val y = tb[i]
+            if (x.digits != y.digits) return if (x.digits) -1 else 1
+            val c = if (x.digits) compareNumeric(x.text, y.text) else compareText(x.text, y.text)
+            if (c != 0) return c
+        }
+        return ta.size - tb.size
+    }
+
+    // (sort_order, 自然名) 复合比较，对齐桌面端 sorted(rows, key=(sort_order, _name_sort_key(name)))
+    fun <T> comparator(sortOf: (T) -> Int, nameOf: (T) -> String): Comparator<T> {
+        return Comparator { x, y ->
+            val c = sortOf(x).compareTo(sortOf(y))
+            if (c != 0) c else compare(nameOf(x), nameOf(y))
+        }
+    }
+}
 
 class MemeDb(context: Context) {
 
@@ -28,6 +90,15 @@ class MemeDb(context: Context) {
                     instance = null
                 }
             }
+        }
+    }
+
+    /** 把 WAL 内容并入主库文件，供备份前拷贝出一致快照 */
+    fun checkpoint() {
+        try {
+            db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null)?.use { it.moveToFirst() }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "checkpoint failed: $e")
         }
     }
 
@@ -325,7 +396,7 @@ class MemeDb(context: Context) {
     fun getCollections(): List<Collection> {
         val result = mutableListOf<Collection>()
         db.rawQuery(
-            "SELECT id, name, parent_id, sort_order FROM collections ORDER BY sort_order ASC, name",
+            "SELECT id, name, parent_id, sort_order FROM collections",
             null
         ).use { cur ->
             while (cur.moveToNext()) {
@@ -333,21 +404,20 @@ class MemeDb(context: Context) {
                 result.add(Collection(cur.getLong(0), cur.getString(1), parentId, cur.getInt(3)))
             }
         }
-        return result
+        return result.sortedWith(NameSorter.comparator({ it.sortOrder }, { it.name }))
     }
 
     fun getChildCollections(parentId: Long): List<Collection> {
         val result = mutableListOf<Collection>()
         db.rawQuery(
-            "SELECT id, name, parent_id, sort_order FROM collections WHERE parent_id=? " +
-                "ORDER BY sort_order ASC, name",
+            "SELECT id, name, parent_id, sort_order FROM collections WHERE parent_id=?",
             arrayOf(parentId.toString())
         ).use { cur ->
             while (cur.moveToNext()) {
                 result.add(Collection(cur.getLong(0), cur.getString(1), parentId, cur.getInt(3)))
             }
         }
-        return result
+        return result.sortedWith(NameSorter.comparator({ it.sortOrder }, { it.name }))
     }
 
     fun getCollectionDepth(cid: Long): Int {
@@ -388,8 +458,13 @@ class MemeDb(context: Context) {
         val params = mutableListOf<String>()
 
         if (keyword.isNotEmpty()) {
-            where.add("(m.filename LIKE ? OR m.original_name LIKE ?)")
+            where.add(
+                "(m.filename LIKE ? OR m.original_name LIKE ? OR m.id IN " +
+                    "(SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
+                    "WHERE t.name LIKE ?))"
+            )
             val kw = "%$keyword%"
+            params.add(kw)
             params.add(kw)
             params.add(kw)
         }
@@ -447,8 +522,13 @@ class MemeDb(context: Context) {
         val where = mutableListOf("(stego_of_hash IS NULL OR stego_of_hash = '')")
         val params = mutableListOf<String>()
         if (keyword.isNotEmpty()) {
-            where.add("(filename LIKE ? OR original_name LIKE ?)")
+            where.add(
+                "(filename LIKE ? OR original_name LIKE ? OR id IN " +
+                    "(SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
+                    "WHERE t.name LIKE ?))"
+            )
             val kw = "%$keyword%"
+            params.add(kw)
             params.add(kw)
             params.add(kw)
         }

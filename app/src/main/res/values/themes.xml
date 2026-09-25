@@ -6,6 +6,7 @@
         <item name="colorOnSecondary">@color/white</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:textColor">@color/fg</item>
         <item name="android:textColorHint">@color/muted</item>
@@ -14,7 +15,7 @@
     </style>
 
     <style name="AlertDialog.OhMyMeme" parent="Theme.MaterialComponents.Dialog.Alert">
-        <item name="android:background">@color/card</item>
+        <item name="android:background">@drawable/bg_dialog</item>
         <item name="android:textColor">@color/fg</item>
         <item name="android:textColorPrimary">@color/fg</item>
         <item name="buttonBarPositiveButtonStyle">@style/PositiveButton.OhMyMeme</item>
@@ -22,7 +23,7 @@
     </style>
 
     <style name="PopupMenu.OhMyMeme" parent="Widget.MaterialComponents.PopupMenu">
-        <item name="android:popupBackground">@color/card</item>
+        <item name="android:popupBackground">@drawable/bg_popup</item>
         <item name="android:textColor">@color/fg</item>
     </style>
 

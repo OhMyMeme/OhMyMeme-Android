@@ -200,6 +200,7 @@ object CloudSync {
         private var control: Socket? = null
         private var reader: BufferedReader? = null
         private var writer: PrintWriter? = null
+        private val ensuredDirs = mutableSetOf<String>()
 
         override fun connect() {
             val host = cfg.optString("ftp_host", "")
@@ -278,12 +279,14 @@ object CloudSync {
             var sofar = ""
             for (p in parts) {
                 sofar += "/" + p
+                if (sofar in ensuredDirs) continue
                 try {
                     cmd("CWD $sofar")
                 } catch (e: SyncError) {
                     cmd("MKD $sofar")
                     cmd("CWD $sofar")
                 }
+                ensuredDirs.add(sofar)
             }
         }
 
@@ -670,6 +673,7 @@ object CloudSync {
         private var baseUrl = ""
         private var authHeader = ""
         private var timeout = 30
+        private val ensuredDirs = mutableSetOf<String>()
 
         /** 简单 HTTP/1.1 响应：状态码 + 响应体字节 */
         private class DavResponse(val code: Int, val body: ByteArray)
@@ -943,15 +947,25 @@ object CloudSync {
             var rel = ""
             for (p in path.trim('/').split("/").filter { it.isNotEmpty() }) {
                 rel += "/" + p
+                if (rel in ensuredDirs) continue
                 try {
                     val resp = davHttp("MKCOL", davUrl(rel), null)
-                    if (resp.code in 200..399) continue
-                    if (fileExists(rel)) continue
+                    if (resp.code in 200..399) {
+                        ensuredDirs.add(rel)
+                        continue
+                    }
+                    if (fileExists(rel)) {
+                        ensuredDirs.add(rel)
+                        continue
+                    }
                     throw SyncError("MKCOL $rel 失败: HTTP ${resp.code}")
                 } catch (e: SyncError) {
                     throw e
                 } catch (e: IOException) {
-                    if (fileExists(rel)) continue
+                    if (fileExists(rel)) {
+                        ensuredDirs.add(rel)
+                        continue
+                    }
                     throw SyncError("MKCOL $rel 失败: $e")
                 }
             }
@@ -1219,6 +1233,7 @@ object CloudSync {
             bk.connect()
             bk.ensureRemoteDir(root)
             val memeDir = root + "/" + REMOTE_MEME_DIR
+            bk.ensureRemoteDir(memeDir)
             for ((fname, entry) in chunk) {
                 val remoteEntry = remote[fname]
                 val localFile = cacheDir.child(fname)
@@ -1237,7 +1252,6 @@ object CloudSync {
                     progress?.report(0, fname)
                     continue
                 }
-                bk.ensureRemoteDir(memeDir)
                 val tmp = File(ctx.cacheDir, "push_${System.nanoTime()}.tmp")
                 val ok = try {
                     localFile.copyTo(tmp)
