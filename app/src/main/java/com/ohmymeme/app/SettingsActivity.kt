@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 
 class SettingsActivity : AppCompatActivity() {
@@ -37,6 +38,7 @@ class SettingsActivity : AppCompatActivity() {
         loadConfig()
         setupButtons()
         setupExportLogs()
+        setupBackup()
         setupStorage()
         setupLan()
         setupQuickSettings()
@@ -162,6 +164,8 @@ class SettingsActivity : AppCompatActivity() {
             if (cfg.optString("s3_signature_version", "s3") == "s3v4") 1 else 0
         )
         findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 1))
+        findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked =
+            cfg.optBoolean("copy_avoid_webp", false)
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
             cfg.optBoolean("sync_auto_fetch_index", false)
@@ -230,6 +234,18 @@ class SettingsActivity : AppCompatActivity() {
     private val exportLogsLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
             if (uri != null) writeLogsTo(uri)
+        }
+
+    private val backupLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+            if (uri != null) runBackup(uri)
+        }
+
+    private val restoreLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                result.data?.data?.let { confirmRestore(it) }
+            }
         }
 
     private val storageDirLauncher =
@@ -563,6 +579,91 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupBackup() {
+        findViewById<TextView>(R.id.btn_backup).setOnClickListener {
+            val date = java.text.SimpleDateFormat("yyyyMMdd").format(java.util.Date())
+            backupLauncher.launch("OhMyMeme-backup-$date.zip")
+        }
+        findViewById<TextView>(R.id.btn_restore).setOnClickListener {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(
+                    Intent.EXTRA_MIME_TYPES,
+                    arrayOf("application/zip", "application/octet-stream")
+                )
+            }
+            restoreLauncher.launch(intent)
+        }
+    }
+
+    private fun runBackup(uri: Uri) {
+        val btn = findViewById<TextView>(R.id.btn_backup)
+        saveConfig()
+        btn.isEnabled = false
+        btn.text = getString(R.string.backup_running)
+        Thread {
+            try {
+                val out = contentResolver.openOutputStream(uri)
+                    ?: throw IllegalStateException("openOutputStream failed")
+                val stats = BackupManager.backup(this, out)
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_backup)
+                    toast(getString(R.string.backup_done, stats.files))
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_backup)
+                    toast(getString(R.string.backup_failed, e.message ?: "error"))
+                }
+            }
+        }.start()
+    }
+
+    private fun confirmRestore(uri: Uri) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.restore_confirm_title))
+            .setMessage(getString(R.string.restore_confirm))
+            .setPositiveButton(getString(R.string.ok)) { _, _ -> runRestore(uri) }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun runRestore(uri: Uri) {
+        val btn = findViewById<TextView>(R.id.btn_restore)
+        btn.isEnabled = false
+        btn.text = getString(R.string.restore_running)
+        Thread {
+            try {
+                val tmp = File(cacheDir, "restore_input_${System.nanoTime()}.zip")
+                try {
+                    contentResolver.openInputStream(uri)?.use { inp ->
+                        tmp.outputStream().use { out -> inp.copyTo(out) }
+                    } ?: throw IllegalStateException("openInputStream failed")
+                    BackupManager.restore(this, tmp)
+                } finally {
+                    tmp.delete()
+                }
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_restore)
+                    ConfigStore.reload(this)
+                    loadConfig()
+                    setResult(RESULT_OK)
+                    toast(getString(R.string.restore_done))
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    btn.isEnabled = true
+                    btn.text = getString(R.string.btn_restore)
+                    toast(getString(R.string.restore_failed, e.message ?: "error"))
+                }
+            }
+        }.start()
+    }
+
     /** 控制中心快捷开关：弹出操作指引（系统磁贴需用户手动从快捷设置编辑面板添加） */
     private fun setupQuickSettings() {
         findViewById<TextView>(R.id.btn_add_qs_tile).setOnClickListener {
@@ -738,6 +839,7 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "show_uncategorized", findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked)
         ConfigStore.set(this, "record_recent_use", findViewById<SwitchMaterial>(R.id.sw_record_recent).isChecked)
         ConfigStore.set(this, "copy_resize_mode", findViewById<Spinner>(R.id.sp_copy_mode).selectedItemPosition)
+        ConfigStore.set(this, "copy_avoid_webp", findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked)
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
         ConfigStore.set(this, "sync_type", syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition])

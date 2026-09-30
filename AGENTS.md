@@ -53,14 +53,17 @@ app/src/main/
     GifStego.kt         # STG3 隐写检测 + 7 模式解码 + encode 写入（FULL/LZMA/WebP 候选）+ 自研 PNG 编码
     AndroidGifDecoder.kt# 设备端 WebP→RGBA（反预乘 alpha）
     Thumbnailer.kt      # 缩略图生成 {id}_{size}.png
-    MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 缩放 WebP / 转 GIF / 转隐写 GIF
+    MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 缩放 WebP / 转 GIF / 转隐写 GIF；copy_avoid_webp 开关走 avoidWebp（静态 WebP→PNG/JPG，动图回退原图）
+    WebpAnim.kt         # 动画 WebP 解析（RIFF/VP8X/ANIM/ANMF 子块）+ 帧包装，供 WebP→GIF
+    BackupManager.kt    # 设置页 ZIP 备份/恢复（db+config+cache+thumbnails，staging 校验防路径穿越）
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
     LanClient.kt        # 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话）
-    UpdateChecker.kt    # 版本更新检查（GitHub Releases API）
+    UpdateChecker.kt    # 版本更新检查（GitHub Releases API，24h TTL 启动自动检查）
+    SetupGuideActivity.kt # 首次设置向导（5 步：欢迎/存储/复制/云同步/完成）
     QuickTileService.kt # 控制中心快捷磁贴（TileService，点击打开主界面）
   res/
-    layout/activity_main.xml / activity_settings.xml / item_* / dialog_tag_editor.xml / dialog_add_collection.xml
-    values/colors.xml   # 暗色配色（bg #0D0D0F、card #1E1E22、accent #3B82F6、muted #71717A）
+    layout/activity_main.xml / activity_settings.xml / activity_setup_guide.xml / item_* / dialog_tag_editor.xml / dialog_add_collection.xml
+    values/colors.xml   # 暗色配色（slate 体系：bg #0D0D0F、card/surface #1A1A1F、fg #E2E8F0、fg_secondary #94A3B8、muted #8A94A8、border #2A2A32、accent #3B82F6、primary_strong #1D4ED8）
     values/themes.xml   # Theme.OhMyMeme（含 values-night）
     values/strings.xml  # 含 copy_mode_options / sync_type_options / s3_addressing_options / s3_signature_options
 ```
@@ -90,15 +93,15 @@ Android/data/com.ohmymeme.app/
 - 单例：`MemeDb.get(context)`，用 `applicationContext` 防泄漏
 
 ### 配置（ConfigStore.kt）
-- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"` 等）
+- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false` 等）
 - `SECRET_KEYS` 6 个密钥字段（s3_access_key/s3_secret_key/r2_access_key_id/r2_secret_access_key/ftp_password/webdav_password）写入前加密、读取后解密
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
 
-### 首次运行存储位置 / 修改存储位置
-- `StoragePaths.isFirstRun` 检测（SharedPreferences 标记 `setup_done`），首次启动弹窗二选一：默认位置（应用专属外部目录）或「选择其他位置」（SAF `ACTION_OPEN_DOCUMENT_TREE`）
-- 选中后 `StoragePaths.persistDataTree`（`takePersistableUriPermission` + 探针校验，失败即拒绝）→ `setDataTree` 持久化 `KEY_DATA_TREE`；`describeDataLocation` 用 `resolveTreeUriPath` 把树 URI 解析为真实路径仅作展示（`primary:`→外部存储根，`home:`→Downloads），解析失败显示 URI
-- 选完位置后 `markSetupDone` + `ConfigStore.invalidate` 再加载数据
+### 首次设置向导 / 存储位置
+- `StoragePaths.isFirstRun` 检测（SharedPreferences 标记 `setup_done`），首次启动进入 `SetupGuideActivity` 5 步向导（欢迎 → 存储位置 → 复制处理 → 云同步介绍（可跳过）→ 完成）；向导可退出，下次启动继续（`RESULT_OK` 才 `reloadData`）
+- 存储步：默认位置直接 `markSetupDone`（向导完成时统一打点）；选自定义走 SAF `ACTION_OPEN_DOCUMENT_TREE`，`persistDataTree`（`takePersistableUriPermission` + 探针校验，失败即拒绝并回退默认选项）
+- 复制步把 `copy_resize_mode`（从 `copy_mode_options` 动态生成 RadioButton）与 `copy_avoid_webp` 写入 `ConfigStore.save`
 - 设置页修改位置：`onStorageDirPicked` 同样先 `persistDataTree`，弹窗询问是否转移，`moveDataToTree` 用 `StorFile` 只拷贝 `cache`/`thumbnails` 两个子目录（绝不拷贝 memes.db），成功后删除源子树并 `applyStorageTree`
 
 ### 导入（MemeImporter.kt）
@@ -145,10 +148,11 @@ Android/data/com.ohmymeme.app/
 - 长按菜单「打标签」（`act_tag`）→ `promptEditTags(meme)`：`dialog_tag_editor.xml`（输入框 + `rv_tag_list` + 已选摘要），输入框实时过滤已有标签（`getAllTags`），点选/取消多选，回车把当前输入文本作为新标签加入，保存走 `setMemeTags`
 - `setMemeTags` 重写后新增孤儿标签清理（`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)`），对齐桌面端 `set_meme_tags` 的清理逻辑
 - 标签行过滤与分组/关键词叠加，全含匹配（`memeIdsWithAllTags(tags)` 逐标签 INTERSECT），对齐桌面端 `search_memes` 的 `tags` 参数
+- 批量打标签：整理模式操作栏「打标签」按钮 → `promptEditTagsInternal(ids, replace=false)`，在每个表情既有标签上追加所选（`getMemeTags(mid)+picked` 去重并集）；单张入口仍 `replace=true` 覆盖；批量保存后自动退出整理模式并刷新
 
 ### 整理模式（MainActivity.kt + MemeGridAdapter.kt）
 - 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除 + 拖拽排序共存）**，对齐桌面端多选操作栏
-- 整理模式下：卡片显示勾选徽标（`tv_select_check`，`bg_select_check` 圆底 ✓），点击卡片切换选中（不走分享/记录最近使用），菜单按钮隐藏；**拖拽 handle 始终可见可拖拽**（`canOrder = manageMode || sortModeEnabled`），tap=选中/handle=排序共存；底部操作栏 `manage_bar`（「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组」，网格底部 padding 加大防遮挡）
+- 整理模式下：卡片显示勾选徽标（`tv_select_check`，`bg_select_check` 圆底 ✓），点击卡片切换选中（不走分享/记录最近使用），菜单按钮隐藏；**拖拽 handle 始终可见可拖拽**（`canOrder = manageMode || sortModeEnabled`），tap=选中/handle=排序共存；底部操作栏 `manage_bar`（「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组 / 打标签」，网格底部 padding 加大防遮挡）
 - 批量删除：`MemeGridAdapter.itemsByIds(ids)` 取 Meme → `deleteMemeFiles` 删物理文件与缩略图 → `MemeDb.deleteMemes(ids)` 单事务批量删（`id IN (...)`，外键 ON DELETE CASCADE 清理关联表 + 孤儿标签清理），对齐桌面端 `delete_memes`
 - 拖拽排序入口移至「更多」菜单 `act_toggle_drag_sort`（`toggleDragSort`），门控条件不变（`canOrderCards`）
 
@@ -175,6 +179,7 @@ Android/data/com.ohmymeme.app/
 - `MemeGridAdapter` 持有可变 `items`，`move(from,to)` 用 `notifyItemMoved`，`currentIds()` 供落库取序
 
 ### 版本更新（UpdateChecker.kt）
+- **启动自动检查（24h TTL）**：`shouldCheck`/`markChecked`（SharedPreferences `update_check`，发起即打点），距上次检查超 24h 才在启动后台自动查一次（首跑跳过），避免每次启动重复弹更新框；设置页手动检查不受 TTL 限制
 - 桌面端 `updater.py` 迁移：`_parse_version` → `parseVersion`，`_pick_asset_url` → 遍历 assets 找 `.apk`
 - GitHub Releases API：`https://api.github.com/repos/OhMyMeme/OhMyMeme-Android/releases/latest`，repo 地址与桌面端不同（Android 仓库）
 - **两级回退**（对齐桌面端 `check_latest`）：先并发 `fetchFirst(GITHUB_LATEST)`（镜像+直连，`invokeAny`），404/失败时回退 `GITHUB_LIST`（`releases?per_page=5`）`pickHighestFromList` 取最高版本（无 `.apk` 资产时回退 release `html_url`）
@@ -245,20 +250,21 @@ Android/data/com.ohmymeme.app/
 ## 已实现 / 未实现
 ### 复制处理（MemeCopyProcessor.kt + GifEncoder.kt + GifStego.encode）
 - 对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3`（`_resize_static_to_webp`/`_static_to_gif`/`_make_stego_gif`）+ `gif_stego.py` `_candidates`/`make_stego_gif`
-- `MemeCopyProcessor.process(context, file)`：`copy_resize_mode==0` 或 `isAnimatedFile`（动图）或未超 `copy_resize_max` 时返回 null 回退原图；模式 1 缩放 WebP(q90，ARGB_8888 解码，LANCZOS 语义用 `createScaledBitmap` 替代)、模式 2 转 GIF、模式 3 转隐写 GIF
+- `MemeCopyProcessor.process(context, file)`：`copy_resize_mode==0` 或 `isAnimatedFile`（动图）或未超 `copy_resize_max` 时返回 null 回退原图；模式 1 缩放 WebP(q90，ARGB_8888 解码，LANCZOS 语义用 `createScaledBitmap` 替代)、模式 2 转 GIF、模式 3 转隐写 GIF；**`copy_avoid_webp`（对齐桌面端 `webui.py` copy_meme 的 avoid）开启时**：动图直接回退原图，静态 WebP 走 `avoidWebp`（不生成不透明 WebP）——超限缩放改输出 PNG（有 alpha）/ JPG（`staticWebpToJpg` 白底 flatten，对齐 `_static_webp_to_jpg`），未超限静态 WebP 亦转 JPG；`toResized` 按 avoid 切换 PNG/JPG/WebP 输出
+- **动画 WebP → GIF**：`WebpAnim.parse`（RIFF/WEBP/VP8X 动画标志/ANIM 循环与 BGRA 背景/ANMF 帧头：24bit 尺寸与时长、no-blend=bit1、dispose 背景=bit0、VP8L/VP8/ALPH 子块）→ 逐帧 Canvas 合成（pendingClear dispose、no-blend CLEAR、等比缩放 ≤maxSide 不放大、argbToRgba）→ `GifEncoder.encodeAnimated`（GIF89a、无 GCT、NETSCAPE2.0 含终止字节 0x00、逐帧 GCE packed=0x04|(trans?1) delay=max(2,(ms+5)/10)、图像描述符局部色板 256、LZW 子块、trailer 0x3B）；`quantize(reserveTransparent)` 有透明帧时预留 1 色并记录 transIdx，不透明帧单帧字节与原实现一致
 - 像素对齐 Pillow：`getPixels` 取预乘 ARGB 后**反预乘**还原真实 RGB（同 `AndroidGifDecoder`）；kind 判定 `bmp.hasAlpha()`→RGBA、全像素 r==g==b→L、否则 RGB（对应桌面端 `_delta_data` 的 mode 判定）
 - `GifEncoder`（纯 JVM，可单测）：median cut 量化到 ≤256 色 + GIF89a/LZW 编码；**LZW 码长升位时机 = 新增条目后 `nextCode == (1 shl codeSize) + 1`**（非标准实现常见的 `== 1 shl codeSize`），与 `GifFrameDecoder.lzwDecode` 的 `dict.size == 1 shl codeSize` 延迟升位严格对应，已用 Python+Pillow 跨 512/1024/2048 边界与表满场景逐字节验证
 - `GifStego.encode(gifData, origBytes, origExt, origPixels, kind, w, h, webpLossless?)`：生成 FULL（`extLen+ext+origBytes` 整体 LZMA）与差值候选（LZMA 恒生成；WebP 候选仅当 `webpLossless` 回调返回非空，Android 端 API 30+ 用 `WEBP_LOSSLESS` 保证无损，低版本跳过），取 payload 最小者；LZMA 用 `XZOutputStream`（`LZMA2Options(6)`，preset 9 太重）；RGBA 不生成 WebP 候选（libwebp 可能改写全透明像素 RGB）
-- 单测：`GifEncoderTest`（256 色内逐字节精确、灰度精确、跨边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值与 FULL 全图 encode→decode 逐字节还原，FULL 用「极小 origBytes + 大差值」保证选中）
+- 单测：`GifEncoderTest`（256 色内逐字节精确、灰度精确、跨边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值与 FULL 全图 encode→decode 逐字节还原，FULL 用「极小 origBytes + 大差值」保证选中）、`WebpAnimTest`、`GifEncoderAnimatedTest`（动画头/GCE/子块遍历）、`NameSorterTest`
 
 ### 已实现
 - 主界面 / 设置页暗色 UI 复刻 + 桌面端布局复刻（顶栏折叠按钮 + logo + 图标、搜索框独立一行、标签行、左侧常驻分组树侧栏 `rv_sidebar` 默认收起）
 - 存储层：路径、SQLite 数据库、JSON 配置 + 密钥加密
 - 缓存扫描、SAF 导入（20MiB/2560px 上限，ImportOutcome/ImportResult 汇总）、缩略图生成
-- 搜索（关键词实时）+ 标签行过滤（多选叠加，全含匹配）+ 空状态切换
+- 搜索（关键词实时，含**标签名**，对齐桌面端 `search_memes`）+ 标签行过滤（多选叠加，全含匹配）+ 空状态切换（插画 + 导入按钮）
 - 设置页保存/重置接真实配置
-- 首次运行存储位置选择
-- 版本更新检查（GitHub Releases API，列表路径跳过 draft/prerelease/nightly/beta/rc 只推正式版）
+- 首次设置向导（`SetupGuideActivity` 5 步：欢迎/存储/复制/云同步/完成，替换原首启 AlertDialog）
+- 版本更新检查（GitHub Releases API，列表路径跳过 draft/prerelease/nightly/beta/rc 只推正式版；24h TTL 启动自动检查）
 - GIF 动图播放（`auto_play_gif` 开关控制，WebP 动图亦支持）
 - 长按右键菜单（重命名/收藏/打标签/添加分组（两段式）/从最近使用中删除/删除）
 - 表情网格间距（卡片 5dp 外边距）
@@ -274,10 +280,15 @@ Android/data/com.ohmymeme.app/
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
 - 分组管理：长按分组胶囊重命名/删除（成员移回上层），最近使用分组「清空最近使用」
 - 标签系统：`promptEditTags` 对话框搜索/点选/回车新建标签，`setMemeTags` 孤儿标签清理；标签行多选叠加过滤（`memeIdsWithAllTags`），对齐桌面端 TagEditor + App.vue 标签栏
-- 整理模式（多选批量删除）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组」，`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；整理模式下拖拽 handle 始终可见可拖拽，tap=选中/handle=排序共存
+- 整理模式（多选批量操作）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组 / 打标签」（批量打标签为追加模式，单张仍覆盖），`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；整理模式下拖拽 handle 始终可见可拖拽，tap=选中/handle=排序共存
 - 拖拽排序：已融入整理模式。仅在空搜索、全局或正数真实分组且至少 2 张卡片时，卡片左上手柄显示并允许排序。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
-- 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发
+- 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发；`copy_avoid_webp` 开启后动图 WebP 不转 GIF 直发、静态 WebP 走 PNG/JPG 输出（见上方「复制处理」小节）
+- 备份与恢复（`BackupManager`）：设置页「备份数据」导出单 ZIP（meta + memes.db（`MemeDb.checkpoint` 先 WAL checkpoint）+ config.json + cache/ 全量 + thumbnails/）；「恢复数据」经 staging 解包校验（拒绝 `..`/绝对路径）后关库替换 DB、替换 config 并 `ConfigStore.reload`、SAF/真实路径双模迁移 cache/thumbnails，覆盖前弹确认框，完成后回设置页触发 `RESULT_OK` 刷新
+- Logo 点击回主页：清 `activeTags`/`activeCollectionId`/搜索框并 `reloadData()`
+- 云端同步效率：FTP/WebDAV `push`/`pull` 用连接级 `ensuredDirs` 缓存远端目录、循环外仅 `ensureRemoteDir(memeDir)` 一次（消除逐文件 MKO/重复建目录）
+- 名称排序：`NameSorter`（数字感知 + 大小写不敏感，对齐桌面端 `_name_sort_key`）取代 SQL `ORDER BY name`
+- UI 视觉对齐桌面端 `style.css`：slate 色板、卡片 2dp 描边、按钮/input 4dp、弹窗 12dp 圆角描边、弹出菜单 8dp、状态栏+导航栏固定 `bg`、空状态插画+导入按钮、主按钮 `#1D4ED8`
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
 - 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）；拉取后同步分组（递归子集合）+ 标签
 - 「未分类」分组：顶栏胶囊显示未加入任何分组的表情（虚拟分组 `-4`，`MemeDb.search`/`count` 的 `uncategorizedOnly` 参数对应桌面端 `uncategorized_only`），计数 > 0 才显示、清零自动隐藏并退出视图；负数 id 使拖拽排序/长按分组菜单自动禁用；`CloudSync` 清单仅遍历真实 `collections` 表不受影响；设置页「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py`/`settings.html`）

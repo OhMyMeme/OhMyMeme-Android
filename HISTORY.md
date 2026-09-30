@@ -1,3 +1,27 @@
+# v0.5.5 — 桌面功能迁移 + 首次设置向导 + 视觉对齐
+
+## 新增
+
+- **复制处理「跳过 WebP 转换」（对齐桌面端 `clipboard_util.py` avoid 逻辑）** — 设置页与向导新增 `copy_avoid_webp` 开关：动图 WebP 分享不再转 GIF 也不超限检查，直接回退原图；静态 WebP 分享改走 PNG/JPG 输出避免生成不透明 WebP（`MemeCopyProcessor.avoidWebp`，`staticWebpToJpg` 白底 flatten 对齐桌面端 `_static_webp_to_jpg`）
+- **动画 WebP 转 GIF** — 自研 `WebpAnim`（RIFF/VP8X/ANIM/ANMF 解析、帧合成含 dispose/no-blend、有 alpha 帧包 VP8X+ALPH）+ `GifEncoder.encodeAnimated`（GIF89a、NETSCAPE 循环、逐帧 GCE 延迟/透明色、LZW 子块），无 avoid 开关时超限动画 WebP 可转 GIF 分享
+- **整理模式批量打标签** — 底部操作栏新增「打标签」按钮，弹标签编辑器批量模式（在各自既有标签上追加所选，保留原标签；单张表情仍为覆盖模式）
+- **首次设置向导（裁剪版 5 步）** — 新增 `SetupGuideActivity`：欢迎 → 存储位置（默认 / SAF 自定义，选失败自动回退默认）→ 复制处理（resize 模式 + 跳过 WebP 开关）→ 云同步（介绍，可直接下一步）→ 完成（`markSetupDone`）；替换原首启 AlertDialog 二选一，配置实时写入 `ConfigStore`，全部选项随时可在设置页修改
+- **设置页 ZIP 备份 / 恢复** — 新增 `BackupManager`：备份 = meta + memes.db（先 `PRAGMA wal_checkpoint(TRUNCATE)`）+ config.json + cache/ + thumbnails/ 打成单 ZIP；恢复 = 解包 staging 校验（拒绝 `..`/绝对路径防路径穿越）→ 关库替换 DB → 替换 config（`ConfigStore.reload`）→ SAF/真实路径双模迁移 cache/thumbnails；恢复前弹确认框（将覆盖全部数据）
+- **启动自动更新检查（24h TTL）** — `UpdateChecker.shouldCheck/markChecked`，启动距上次检查超 24h 自动查一次（首跑跳过，检查即打点不重复弹窗），仍保留设置页手动检查
+- **Logo 点击回主页** — 点击顶栏 logo 清除标签/分组/搜索过滤并刷新，等价桌面端回首页
+- **搜索支持按标签名** — `MemeDb.search` 关键词匹配扩展为 `name/original_name LIKE ? OR id IN (SELECT ... tags.name LIKE ?)`，对齐桌面端 `search_memes`
+- **云端同步远端目录缓存** — FTP/WebDAV push/pull 循环内 `mkd` 前先查 `ensuredDirs` 集合（连接级缓存），循环外仅 `ensureRemoteDir(memeDir)` 一次，消除每文件 MKO 重复建目录
+- **名称排序对齐桌面端** — 新增 `NameSorter`（数字感知 + 大小写不敏感，语义对齐桌面端 `_name_sort_key`）取代 SQL `ORDER BY name`，附 `NameSorterTest`
+- **UI 视觉对齐桌面端 style.css** — 色板换 slate 体系（`fg #E2E8F0` / `fg_secondary #94A3B8` / `muted #8A94A8` / `border #2A2A32` / `card/surface #1A1A1F` / `surface_2 #222228`），主按钮 `#1D4ED8`、卡片描边 2dp、按钮/输入框圆角 4dp、弹窗圆角 12dp 带描边、弹出菜单圆角 8dp、状态栏与导航栏固定 `bg`；空状态从 `_(:3 」∠)_` 换为插画（ic_photo）+「导入」按钮
+
+## 测试
+
+- 新增 `WebpAnimTest`（RIFF 解析 / VP8X 动画标志 / ANMF 头与 no-blend、dispose 位 / wrapFrame 无 alpha 走 imgType 0x10）、`GifEncoderAnimatedTest`（NETSCAPE 循环块、逐帧 GCE 延迟/透明标志、LZW 图像子块与 trailer 逐帧遍历、有 alpha 帧透明色保留）、`NameSorterTest`（数字感知与大小写不敏感）；全部 `testDebugUnitTest` 通过
+
+## 其他
+
+- **版本号** — versionCode 12 / versionName 0.5.5
+
 # v0.5.0 — 桌面端布局复刻 + 标签系统 + 整理模式 + S3 OSS 兼容
 
 ## 新增

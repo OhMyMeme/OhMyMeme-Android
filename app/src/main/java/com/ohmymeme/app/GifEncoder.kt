@@ -43,21 +43,93 @@ object GifEncoder {
         return out.toByteArray()
     }
 
-    private fun quantize(rgba: ByteArray, width: Int, height: Int): Pair<ByteArray, IntArray> {
+    /** 多帧 GIF89a：NETSCAPE 无限循环 + 逐帧 GCE（延时/透明）+ 局部色板，alpha<128 保留为透明 */
+    fun encodeAnimated(
+        frames: List<ByteArray>,
+        durationsMs: List<Int>,
+        width: Int,
+        height: Int
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write("GIF89a".toByteArray(Charsets.ISO_8859_1))
+        writeLe16(out, width)
+        writeLe16(out, height)
+        out.write(0x70) // 无全局色板
+        out.write(0)
+        out.write(0)
+        out.write(0x21)
+        out.write(0xFF)
+        out.write(0x0B)
+        out.write("NETSCAPE2.0".toByteArray(Charsets.ISO_8859_1))
+        out.write(0x03)
+        out.write(0x01)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x00) // 扩展块终止
+        for (i in frames.indices) {
+            val (palette, indices, transIdx) =
+                quantize(frames[i], width, height, reserveTransparent = true)
+            val delayCs = maxOf(2, (durationsMs.getOrElse(i) { 0 } + 5) / 10)
+            out.write(0x21)
+            out.write(0xF9)
+            out.write(0x04)
+            out.write(0x04 or (if (transIdx >= 0) 0x01 else 0x00)) // disposal=保留
+            writeLe16(out, delayCs)
+            out.write(if (transIdx >= 0) transIdx else 0)
+            out.write(0x00)
+            out.write(0x2C)
+            writeLe16(out, 0)
+            writeLe16(out, 0)
+            writeLe16(out, width)
+            writeLe16(out, height)
+            out.write(0x80 or 0x07) // 局部色板 256 色
+            out.write(palette)
+            out.write(8)
+            val lzw = lzwEncode(indices)
+            var j = 0
+            while (j < lzw.size) {
+                val len = minOf(255, lzw.size - j)
+                out.write(len)
+                out.write(lzw, j, len)
+                j += len
+            }
+            out.write(0)
+        }
+        out.write(0x3B)
+        return out.toByteArray()
+    }
+
+    private fun quantize(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        reserveTransparent: Boolean = false
+    ): Triple<ByteArray, IntArray, Int> {
         val n = width * height
         val hist = HashMap<Int, Int>()
         val pixels = IntArray(n)
+        var hasTransparent = false
         var s = 0
         for (p in 0 until n) {
             val r = rgba[s].toInt() and 0xFF
             val g = rgba[s + 1].toInt() and 0xFF
             val b = rgba[s + 2].toInt() and 0xFF
+            val a = rgba[s + 3].toInt() and 0xFF
             s += 4
             val c = (r shl 16) or (g shl 8) or b
             pixels[p] = c
+            if (reserveTransparent && a < 128) {
+                hasTransparent = true
+                continue
+            }
             hist[c] = (hist[c] ?: 0) + 1
         }
-        if (hist.size <= 256) {
+        val reserve = reserveTransparent && hasTransparent
+        val limit = if (reserve) 255 else 256
+        val transIdx = if (reserve) {
+            if (hist.size <= limit) hist.size else limit
+        } else -1
+        if (hist.size <= limit) {
             val palette = ByteArray(768)
             val map = HashMap<Int, Int>(hist.size)
             var idx = 0
@@ -68,14 +140,15 @@ object GifEncoder {
                 palette[idx * 3 + 2] = (c and 0xFF).toByte()
                 idx++
             }
-            return palette to IntArray(n) { map[pixels[it]] ?: 0 }
+            val fallback = if (transIdx >= 0) transIdx else 0
+            return Triple(palette, IntArray(n) { map[pixels[it]] ?: fallback }, transIdx)
         }
-        // median cut：按最长颜色通道中位数反复分裂到 <=256 盒
+        // median cut：按最长颜色通道中位数反复分裂到 <=limit 盒
         val boxColors = ArrayList<MutableList<Int>>()
         boxColors.add(hist.keys.toMutableList())
         val colorToBox = HashMap<Int, Int>(hist.size)
         for (c in hist.keys) colorToBox[c] = 0
-        while (boxColors.size < 256) {
+        while (boxColors.size < limit) {
             var bestId = -1
             var bestScore = -1L
             for (id in boxColors.indices) {
@@ -133,11 +206,13 @@ object GifEncoder {
                 sb += (c and 0xFF) * cnt
                 sc += cnt
             }
+            if (sc == 0L) continue
             palette[id * 3] = (sr / sc).toByte()
             palette[id * 3 + 1] = (sg / sc).toByte()
             palette[id * 3 + 2] = (sb / sc).toByte()
         }
-        return palette to IntArray(n) { colorToBox[pixels[it]] ?: 0 }
+        val fallback = if (transIdx >= 0) transIdx else 0
+        return Triple(palette, IntArray(n) { colorToBox[pixels[it]] ?: fallback }, transIdx)
     }
 
     /** GIF LZW 编码：LSB-first，clear/end 各占 1 码，码长升位时机与 GifFrameDecoder 一致 */

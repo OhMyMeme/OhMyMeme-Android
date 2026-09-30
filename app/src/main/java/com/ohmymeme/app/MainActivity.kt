@@ -63,9 +63,9 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
             if (uris.isNotEmpty()) doImport(uris)
         }
-    private val pickDirLauncher =
+    private val setupGuideLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            handlePickDirResult(result.resultCode, result.data)
+            if (result.resultCode == RESULT_OK) reloadData()
         }
     private val settingsLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -82,7 +82,52 @@ class MainActivity : AppCompatActivity() {
         setupSearch()
         ensureFirstRunSetup()
         autoSyncIfConfigured()
+        autoUpdateIfDue()
         handleIncomingIntent(intent)
+    }
+
+    /** 启动自动检查更新：24h 内只检查一次，有新版才弹窗（对齐桌面端启动检查） */
+    private fun autoUpdateIfDue() {
+        if (StoragePaths.isFirstRun(this)) return
+        if (!UpdateChecker.shouldCheck(this)) return
+        UpdateChecker.markChecked(this)
+        val current = currentVersionName()
+        executor.execute {
+            val info = UpdateChecker.checkLatest(current)
+            if (info.error.isEmpty() && info.hasUpdate) {
+                runOnUiThread { showUpdateDialog(info) }
+            }
+        }
+    }
+
+    private fun currentVersionName(): String = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun showUpdateDialog(info: UpdateChecker.UpdateInfo) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_available))
+            .setMessage(getString(R.string.update_message, info.latest, currentVersionName()))
+            .setPositiveButton(getString(R.string.update_download)) { _, _ ->
+                openBrowser(UpdateChecker.mirrorDownloadUrl(info.downloadUrl))
+            }
+            .setNegativeButton(getString(R.string.update_later), null)
+            .show()
+    }
+
+    private fun openBrowser(url: String) {
+        if (url.isEmpty()) {
+            toast(getString(R.string.update_no_url))
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            toast(getString(R.string.update_no_url))
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -127,23 +172,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun ensureFirstRunSetup() {
-        if (!StoragePaths.isFirstRun(this)) {
-            reloadData()
-            return
+        if (StoragePaths.isFirstRun(this)) {
+            setupGuideLauncher.launch(Intent(this, SetupGuideActivity::class.java))
         }
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.storage_title))
-            .setMessage(getString(R.string.storage_message))
-            .setCancelable(false)
-            .setPositiveButton(getString(R.string.storage_use_default)) { _, _ ->
-                StoragePaths.markSetupDone(this)
-                reloadData()
-            }
-            .setNegativeButton(getString(R.string.storage_pick_custom)) { _, _ ->
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-                pickDirLauncher.launch(intent)
-            }
-            .show()
+        reloadData()
     }
 
     private fun setupLogo() {
@@ -154,10 +186,21 @@ class MainActivity : AppCompatActivity() {
             4, 8, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
         )
         logo.text = spannable
+        // 点击 logo 回到主页：清空搜索/标签/分组过滤（对齐桌面端 logo 回主页）
+        logo.setOnClickListener {
+            activeTags.clear()
+            activeCollectionId = null
+            val search = findViewById<EditText>(R.id.et_search)
+            if (search.text.isNotEmpty()) {
+                search.setText("") // TextWatcher 会置空 keyword 并刷新
+            }
+            reloadData()
+        }
     }
 
     private fun setupTitleButtons() {
         findViewById<View>(R.id.btn_import).setOnClickListener { showImportMenu(it) }
+        findViewById<View>(R.id.btn_empty_import).setOnClickListener { showImportMenu(it) }
         findViewById<View>(R.id.btn_more).setOnClickListener { showMoreActionsMenu(it) }
         findViewById<View>(R.id.btn_settings).setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
@@ -432,6 +475,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<View>(R.id.btn_manage_delete).setOnClickListener { batchDelete() }
         findViewById<View>(R.id.btn_manage_add_collection).setOnClickListener { batchAddToCollection() }
+        findViewById<View>(R.id.btn_manage_tag).setOnClickListener { batchTag() }
     }
 
     private fun selectAll() {
@@ -905,7 +949,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun promptEditTags(meme: Meme) {
+    /** 批量打标签：追加所选标签到每个已选表情（不覆盖原有标签） */
+    private fun batchTag() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) {
+            toast(getString(R.string.manage_delete_empty))
+            return
+        }
+        promptEditTagsInternal(ids, replace = false)
+    }
+
+    private fun promptEditTags(meme: Meme) = promptEditTagsInternal(listOf(meme.id), replace = true)
+
+    private fun promptEditTagsInternal(ids: List<Long>, replace: Boolean) {
         val view = layoutInflater.inflate(R.layout.dialog_tag_editor, null)
         val input = view.findViewById<EditText>(R.id.et_tag_input)
         val list = view.findViewById<RecyclerView>(R.id.rv_tag_list)
@@ -948,19 +1004,38 @@ class MainActivity : AppCompatActivity() {
         }
         executor.execute {
             val db = MemeDb.get(this)
-            val current = db.getMemeTags(meme.id)
+            if (replace && ids.size == 1) selected.addAll(db.getMemeTags(ids[0]))
             allTags = db.getAllTags()
             runOnUiThread {
-                selected.addAll(current)
                 bind()
+                val title: CharSequence = if (replace) getString(R.string.tag_editor_title)
+                else getString(R.string.tag_editor_title_batch, ids.size)
                 AlertDialog.Builder(this)
-                    .setTitle(R.string.tag_editor_title)
+                    .setTitle(title)
                     .setView(view)
                     .setPositiveButton(R.string.ok) { _, _ ->
+                        val picked = selected.toList()
                         executor.execute {
-                            MemeDb.get(this).setMemeTags(meme.id, selected.toList())
+                            val d = MemeDb.get(this)
+                            if (replace) {
+                                d.setMemeTags(ids[0], picked)
+                            } else {
+                                ids.forEach { mid ->
+                                    d.setMemeTags(mid, (d.getMemeTags(mid) + picked).distinct())
+                                }
+                            }
                             runOnUiThread {
-                                toast(getString(R.string.tags_saved))
+                                toast(
+                                    if (replace) getString(R.string.tags_saved)
+                                    else getString(R.string.tags_saved_batch, ids.size)
+                                )
+                                if (!replace) {
+                                    selectedIds.clear()
+                                    manageMode = false
+                                    findViewById<ImageView>(R.id.btn_sort_mode)
+                                        .setColorFilter(getColor(R.color.muted))
+                                    updateManageBar()
+                                }
                                 reloadData()
                             }
                         }
@@ -1253,20 +1328,6 @@ class MainActivity : AppCompatActivity() {
                 reloadData()
             }
         }
-    }
-
-    private fun handlePickDirResult(resultCode: Int, data: Intent?) {
-        val uri = data?.data
-        if (resultCode == RESULT_OK && uri != null) {
-            if (StoragePaths.persistDataTree(this, uri)) {
-                StoragePaths.setDataTree(this, uri)
-            } else {
-                toast(getString(R.string.storage_pick_not_writable))
-            }
-        }
-        StoragePaths.markSetupDone(this)
-        ConfigStore.invalidate()
-        reloadData()
     }
 
     private fun toast(msg: String) {

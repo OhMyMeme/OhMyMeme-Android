@@ -11,10 +11,6 @@
     <string name="action_drag_to_reorder">拖动以调整顺序</string>
     <string name="settings">设置</string>
     <string name="developing">功能开发中...</string>
-    <string name="storage_title">选择表情包存储位置</string>
-    <string name="storage_message">表情包、数据库和缩略图将保存在所选位置。默认使用应用专属目录，无需存储权限。</string>
-    <string name="storage_use_default">使用默认位置</string>
-    <string name="storage_pick_custom">选择其他位置</string>
     <string name="storage_pick_failed">所选位置不可用，已使用默认位置</string>
     <string name="storage_pick_not_writable">所选位置无法写入，请选择应用可访问的目录</string>
     <string name="import_done">已导入 %1$d 个表情包</string>
@@ -36,9 +32,11 @@
     <string name="ctx_unfavorite">取消收藏</string>
     <string name="ctx_tag">打标签</string>
     <string name="tag_editor_title">编辑标签</string>
+    <string name="tag_editor_title_batch">为 %1$d 个表情添加标签</string>
     <string name="tag_input_hint">搜索已有标签或输入新标签，回车添加</string>
     <string name="tag_selected_label">已选：</string>
     <string name="tags_saved">标签已保存</string>
+    <string name="tags_saved_batch">已为 %1$d 个表情更新标签</string>
     <string name="ctx_add_collection">添加分组</string>
     <string name="ctx_add_subgroup">加入小分组</string>
     <string name="new_subcollection_title">新建小分组</string>
@@ -107,6 +105,8 @@
     <string name="copy_mode_2">转换为 GIF</string>
     <string name="copy_mode_3">转换为 GIF 并隐写原图（可无损还原）</string>
     <string name="copy_process_hint">复制超过尺寸上限的静态图时按此处模式处理；动图不受影响。隐写模式会把原图信息随 GIF 隐藏，接收方可运行解码工具还原，但会显著增大文件体积。</string>
+    <string name="copy_avoid_webp_label">分享时避免 WebP</string>
+    <string name="copy_avoid_webp_hint">微信等应用会把 WebP 当作文件而非图片。开启后缩放输出 JPG（带透明转 PNG），WebP 静态图转 JPG、动画 WebP 转 GIF 再分享。</string>
 
     <string name="sync_title">云端同步</string>
     <string name="sync_auto_fetch">启动时自动获取远端索引</string>
@@ -187,6 +187,35 @@
     <string name="log_title">日志</string>
     <string name="log_note">导出本次运行至今的 Debug 级日志，便于排查问题</string>
     <string name="btn_export_logs">导出日志</string>
+    <string name="backup_title">备份与恢复</string>
+    <string name="backup_note">备份打包表情库、配置、图片缓存与缩略图为一个 ZIP 文件；恢复会覆盖当前全部数据</string>
+    <string name="btn_backup">备份到文件</string>
+    <string name="btn_restore">从文件恢复</string>
+    <string name="backup_running">备份中…</string>
+    <string name="restore_running">恢复中…</string>
+    <string name="backup_done">备份完成：%1$d 个文件</string>
+    <string name="restore_done">恢复完成，返回主界面后生效</string>
+    <string name="backup_failed">备份失败：%1$s</string>
+    <string name="restore_failed">恢复失败：%1$s</string>
+    <string name="restore_confirm_title">恢复备份</string>
+    <string name="restore_confirm">将覆盖当前表情库、配置与图片文件，确定继续？</string>
+    <string name="guide_step">第 %1$d 步 / 共 %2$d 步</string>
+    <string name="guide_welcome_title">欢迎使用 OhMyMeme</string>
+    <string name="guide_welcome_desc">接下来 4 步完成基础配置，全部选项随时可在设置页修改。</string>
+    <string name="guide_storage_title">存储位置</string>
+    <string name="guide_storage_desc">选择表情原图与缩略图的存放目录。不确定就用默认位置。</string>
+    <string name="guide_storage_default">应用默认位置（推荐）</string>
+    <string name="guide_storage_custom">自定义位置（选择文件夹）</string>
+    <string name="guide_storage_picked">已选择：%1$s</string>
+    <string name="guide_copy_title">复制处理</string>
+    <string name="guide_copy_desc">通过微信、QQ 分享图片时，对超过 200px 上限的静态图的处理方式。</string>
+    <string name="guide_sync_title">云同步</string>
+    <string name="guide_sync_desc">多设备同步表情与分组。可以现在跳过，之后随时在设置页配置 FTP / S3 / R2 / WebDAV。</string>
+    <string name="guide_done_title">配置完成</string>
+    <string name="guide_done_desc">一切就绪，点击「开始使用」进入主界面。</string>
+    <string name="guide_back">上一步</string>
+    <string name="guide_next">下一步</string>
+    <string name="guide_finish">开始使用</string>
     <string name="log_export_failed">日志导出失败</string>
     <string name="log_export_done">日志已导出</string>
 
@@ -260,6 +289,7 @@
     <string name="manage_delete_done">已删除 %1$d 个表情包</string>
     <string name="manage_delete_empty">请先选择表情包</string>
     <string name="manage_add_to_collection">加入分组</string>
+    <string name="manage_tag">打标签</string>
     <string name="manage_added_to_collection">已将 %1$d 个表情加入分组：%2$s</string>
 
     <string name="btn_reset">恢复默认</string>

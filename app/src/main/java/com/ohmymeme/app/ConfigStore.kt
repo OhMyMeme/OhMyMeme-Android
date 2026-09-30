@@ -60,6 +60,7 @@ object ConfigStore {
         "webdav_timeout" to 30,
         "copy_resize_mode" to 1,
         "copy_resize_max" to 200,
+        "copy_avoid_webp" to false,
         "show_uncategorized" to true,
         "record_recent_use" to true,
         "s3_addressing_style" to "virtual",

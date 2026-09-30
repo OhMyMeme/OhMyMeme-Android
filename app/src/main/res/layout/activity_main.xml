@@ -164,20 +164,35 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="_(:3 」∠)_"
-                    android:textColor="@color/muted"
-                    android:textSize="38sp" />
+                <ImageView
+                    android:layout_width="72dp"
+                    android:layout_height="72dp"
+                    android:alpha="0.7"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_photo"
+                    app:tint="@color/muted" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="12dp"
                     android:text="@string/empty_hint"
                     android:textColor="@color/muted"
                     android:textSize="13.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_empty_import"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/btn_primary"
+                    android:gravity="center"
+                    android:paddingStart="24dp"
+                    android:paddingEnd="24dp"
+                    android:text="@string/action_import"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
             <LinearLayout
@@ -199,6 +214,8 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
                     android:textColor="@color/fg_secondary"
                     android:textSize="13sp" />
 
@@ -224,6 +241,19 @@
                     android:paddingBottom="6dp"
                     android:text="@string/cancel"
                     android:textColor="@color/muted"
+                    android:textSize="12.5sp" />
+
+                <TextView
+                    android:id="@+id/btn_manage_tag"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_title_btn"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="@string/manage_tag"
+                    android:textColor="@color/accent"
                     android:textSize="12.5sp" />
 
                 <TextView
