@@ -93,7 +93,7 @@ Android/data/com.ohmymeme.app/
 - 单例：`MemeDb.get(context)`，用 `applicationContext` 防泄漏
 
 ### 配置（ConfigStore.kt）
-- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false` 等）
+- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false`、`manifest_include_tags=true` 等）
 - `SECRET_KEYS` 6 个密钥字段（s3_access_key/s3_secret_key/r2_access_key_id/r2_secret_access_key/ftp_password/webdav_password）写入前加密、读取后解密
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
@@ -149,6 +149,7 @@ Android/data/com.ohmymeme.app/
 - `setMemeTags` 重写后新增孤儿标签清理（`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)`），对齐桌面端 `set_meme_tags` 的清理逻辑
 - 标签行过滤与分组/关键词叠加，全含匹配（`memeIdsWithAllTags(tags)` 逐标签 INTERSECT），对齐桌面端 `search_memes` 的 `tags` 参数
 - 批量打标签：整理模式操作栏「打标签」按钮 → `promptEditTagsInternal(ids, replace=false)`，在每个表情既有标签上追加所选（`getMemeTags(mid)+picked` 去重并集）；单张入口仍 `replace=true` 覆盖；批量保存后自动退出整理模式并刷新
+- 同步并入：`MemeDb.mergeMemeTags(memeId, tags)` 事务内 trim/去空/去重后 `INSERT OR IGNORE`，**只增不减**（不做孤儿清理，与 pull/LAN applyRemoteTags 并集语义配套）
 
 ### 整理模式（MainActivity.kt + MemeGridAdapter.kt）
 - 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除 + 拖拽排序共存）**，对齐桌面端多选操作栏
@@ -194,17 +195,18 @@ Android/data/com.ohmymeme.app/
 - **多线程 + 进度回调**（对齐桌面端 `sync_threads`，默认 3，1-8）：`push`/`pull` 分块并发（`chunkList` + `ThreadPoolExecutor`），每块 worker 独立 `createBackend`/`connect` 连接（对应桌面端 `_push_worker`/`_pull_worker` 独立后端）；worker 内跳过/成功/失败分别计数，单文件失败不影响其余；pull 下载后统一回主线程写 DB（避免多线程并发写 SQLite）
 - `SyncProgress` 线程安全计数类（`filesTotal`/`bytesTotal`/`report`/`done`/`bytesDone`/`currentFile`/`startTime`/`onProgress` 回调），worker 线程回调、UI 自行 `runOnUiThread`
 - 对齐桌面端 `sync.py` + `manifest.py`：远端目录 `memes/`（REMOTE_MEME_DIR）+ `meme-index.json`（INDEX_FILENAME，清单 version 3）；远端根：FTP→`ftp_path`、WebDAV→`webdav_path`、对象存储→空
-- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）
+- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）；**`tags: [...]` 数组随条目写入**（受设置 `manifest_include_tags` 门控，默认开；关闭时条目不含该键），不再输出顶层 `tag_map`（读侧仍兼容回退）
 - 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置；**S3 兼容阿里云 OSS**：`signature_version="s3"` 走 SigV2 签名（HMAC-SHA1 + `Authorization: AWS ak:base64`，`signV2`），`addressing_style="virtual"` 走虚拟主机寻址 `https://bucket.endpoint/key`（`urlForKey`），默认即 V2+virtual（对齐桌面端 `config.py` 默认）；R2 强制 SigV4 + path 寻址不变；endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
 - `downloadIndex` 下载远端清单到 dataDir 临时文件再解析，失败清理；`writeTempIndex` 上传前写本地临时清单
 - `push`：本地清单与远端清单按 `filename+sha256` 比对，相同且远端文件存在则跳过；`sync_delete_remote` 时删除远端多余文件；成功后合并远端仍保留的孤儿项重建清单并上传；上传失败即抛 `SyncError` 不更新远端清单
 - **Backend 接口只接受真实 `File`**（`uploadFile(local: File)/downloadFile(remotePath, dest: File)` 三实现不变）；cache/thumbnails 在 SAF 模式下经 `StorFile` 读写，push 上传前 `StorFile.copyTo(context.cacheDir 临时文件)` 物化，pull 先下载到 `context.cacheDir` 临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除
-- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（超限文件跳过并删除临时文件、空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）
+- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（超限文件跳过并删除临时文件、空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）；`applyRemoteTags` 按条目 `tags`（缺失回退顶层 `tag_map`）经 `mergeMemeTags` **并集只增**合入本地（不清理本地独有标签，removeLocal 分支同样执行），不受 `manifest_include_tags` 开关限制
 - 公开 API：`syncTest`（返回 "ok" 或错误信息）、`checkSyncStatus`（返回本地/远端计数与仅本地/仅远端文件名摘要）、`push`/`pull`（返回 `SyncResult(uploaded/downloaded/skipped/errors/deleted/removedLocal/failed)`，失败抛 `SyncError`）、`deleteAllRemote`、`deleteAllLocal`
 - 单线程顺序执行（安卓端不做多线程分片）；同步配置读 `ConfigStore`（密钥字段已解密）
 
 ### 设置页同步接线（SettingsActivity.kt）
 - `sp_sync_type` 位置→`sync_type` 映射：0 无 / 1 ftp / 2 s3 / 3 r2 / 4 webdav（`syncTypes` 列表）；`loadConfig` 回填 `setSelection`，`saveConfig` 写入
+- `sw_manifest_tags`（「将标签写入同步清单」，默认开）读写 `manifest_include_tags`，`loadConfig`/`saveConfig` 双向接线，只门控 `buildManifest` 写入
 - 测试连接/检查状态/上传/下载按钮跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；`btn_sync_push` 文本作进度占位；危险操作（删除本地/云端）先弹确认框
 - 「删除本地所有」复用 `MemeDb.deleteAll` + 清理 cache/缩略图；「删除云端所有」遍历远端清单删除文件+清单
 - 网格间距：`item_meme.xml` 卡片 `layout_margin 5dp`（对应桌面端网格 `gap: 10px`）
@@ -219,7 +221,7 @@ Android/data/com.ohmymeme.app/
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
 - **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
 - **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序 → `CloudSync.applyRemoteCollections` 同步分组（递归子集合）→ `CloudSync.applyRemoteTags` 同步标签；任一检查不过即跳过计入 failed 且不落盘
-- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签（`buildManifest` 含 `tag_map` 字段）
+- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签（条目内 `tags` 数组，受 `manifest_include_tags` 门控）
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
 - **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）

@@ -318,6 +318,29 @@ class MemeDb(context: Context) {
         return result
     }
 
+    fun mergeMemeTags(memeId: Long, tags: List<String>) {
+        val names = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (names.isEmpty()) return
+        db.beginTransaction()
+        try {
+            for (tag in names) {
+                db.execSQL("INSERT OR IGNORE INTO tags (name) VALUES (?)", arrayOf(tag))
+                val cur = db.rawQuery("SELECT id FROM tags WHERE name=?", arrayOf(tag))
+                val tagId: Long? = if (cur.moveToFirst()) cur.getLong(0) else null
+                cur.close()
+                if (tagId != null) {
+                    db.execSQL(
+                        "INSERT OR IGNORE INTO meme_tags (meme_id, tag_id) VALUES (?, ?)",
+                        arrayOf(memeId, tagId)
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun getAllTags(): List<String> {
         val result = mutableListOf<String>()
         db.rawQuery("SELECT name FROM tags ORDER BY name", null).use { cur ->

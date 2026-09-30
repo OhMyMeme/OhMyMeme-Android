@@ -101,8 +101,8 @@ object CloudSync {
 
     internal fun buildManifest(ctx: Context): JSONObject {
         val db = MemeDb.get(ctx)
+        val includeTags = ConfigStore.get(ctx).optBoolean("manifest_include_tags", true)
         val memes = JSONArray()
-        val tagMap = JSONObject()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
             val entry = JSONObject()
                 .put("filename", m.filename)
@@ -113,20 +113,17 @@ object CloudSync {
             if (cacheFile.exists) {
                 entry.put("mtime", (cacheFile.lastModified / 1000).toString())
             }
-            memes.put(entry)
-            val tags = db.getMemeTags(m.id)
-            if (tags.isNotEmpty()) {
-                val arr = JSONArray()
-                tags.forEach { arr.put(it) }
-                tagMap.put(m.filename, arr)
+            if (includeTags) {
+                val tags = JSONArray()
+                db.getMemeTags(m.id).forEach { tags.put(it) }
+                entry.put("tags", tags)
             }
+            memes.put(entry)
         }
-        val data = JSONObject()
+        return JSONObject()
             .put("version", MANIFEST_VERSION)
             .put("memes", memes)
             .put("collections", buildCollectionTree(ctx, null))
-        if (tagMap.length() > 0) data.put("tag_map", tagMap)
-        return data
     }
 
     private fun buildCollectionTree(ctx: Context, parentId: Long?): JSONArray {
@@ -1372,6 +1369,7 @@ object CloudSync {
                 if (f.exists && f.delete()) removed++
             }
             applyRemoteOrder(ctx, data)
+            applyRemoteTags(ctx, data)
             return SyncResult(
                 downloaded = downloaded, skipped = skipped, errors = errors,
                 removedLocal = removed, failed = failed
@@ -1379,6 +1377,7 @@ object CloudSync {
         }
         applyRemoteCollections(ctx, data)
         applyRemoteOrder(ctx, data)
+        applyRemoteTags(ctx, data)
         if (errors > 0) {
             throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
         }
@@ -1583,17 +1582,37 @@ object CloudSync {
 
     internal fun applyRemoteTags(ctx: Context, data: JSONObject) {
         val db = MemeDb.get(ctx)
-        val tagMap = data.optJSONObject("tag_map") ?: return
-        for (filename in tagMap.keys()) {
-            val row = db.getByFilename(filename) ?: continue
-            val tagsArr = tagMap.optJSONArray(filename) ?: continue
-            val tags = mutableListOf<String>()
-            for (i in 0 until tagsArr.length()) {
-                val t = tagsArr.optString(i, "").trim()
-                if (t.isNotEmpty()) tags.add(t)
-            }
-            if (tags.isNotEmpty()) db.setMemeTags(row.id, tags)
+        val legacyTagMap = data.optJSONObject("tag_map")
+        val arr = data.optJSONArray("memes") ?: return
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            val fname = entry.optString("filename", "")
+            if (!isSafeRemoteFname(fname)) continue
+            val tags = tagsFromEntry(entry, legacyTagMap)
+            if (tags.isEmpty()) continue
+            val row = db.getByFilename(fname) ?: continue
+            db.mergeMemeTags(row.id, tags)
         }
+    }
+
+    internal fun tagsFromEntry(entry: JSONObject, legacyTagMap: JSONObject?): List<String> {
+        val arr = entry.optJSONArray("tags")
+        if (arr != null) return jsonTagList(arr)
+        if (legacyTagMap != null) {
+            val legacy = legacyTagMap.optJSONArray(entry.optString("filename", ""))
+            if (legacy != null) return jsonTagList(legacy)
+        }
+        return emptyList()
+    }
+
+    private fun jsonTagList(arr: JSONArray): List<String> {
+        val out = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val v = arr.opt(i) as? String ?: continue
+            val t = v.trim()
+            if (t.isNotEmpty()) out.add(t)
+        }
+        return out
     }
 
     internal fun applyRemoteOrder(ctx: Context, data: JSONObject) {

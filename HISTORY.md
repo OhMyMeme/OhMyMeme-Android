@@ -1,3 +1,11 @@
+# 未发布
+
+## 新增
+
+- **标签随同步清单下发与合入（对齐桌面端）** — `CloudSync.buildManifest` 每条 `memes[]` 条目写入 `tags: [...]` 数组，受新增设置「将标签写入同步清单」（`manifest_include_tags`，默认开）门控，关闭时条目不含该键；不再输出顶层 `tag_map`，读侧仍兼容旧 `tag_map` 并回退；云 pull（`remove_local` 与正常两分支）新增 `applyRemoteTags`（原仅 LAN pull 调用），条目 `tags` 经新增 `MemeDb.mergeMemeTags` **并集只增**合入本地，本地独有标签与删除不同步，该步骤不受开关限制
+- **设置页「将标签写入同步清单」开关** — 云端同步区新增 `sw_manifest_tags`（布局 + `loadConfig`/`saveConfig` + 文案三件套），默认开
+- 新增 `ManifestTagsTest`（6 例：条目 tags 优先、空数组不回退、`tag_map` 回退、双缺失为空、非字符串/空白过滤、`isSafeRemoteFname` 路径穿越拒绝），引入 JVM 测试依赖 `org.json:json`
+
 # v0.5.5 — 桌面功能迁移 + 首次设置向导 + 视觉对齐
 
 ## 新增
