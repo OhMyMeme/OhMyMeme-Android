@@ -207,7 +207,7 @@ Android/data/com.ohmymeme.app/
 ### 设置页同步接线（SettingsActivity.kt）
 - `sp_sync_type` 位置→`sync_type` 映射：0 无 / 1 ftp / 2 s3 / 3 r2 / 4 webdav（`syncTypes` 列表）；`loadConfig` 回填 `setSelection`，`saveConfig` 写入
 - `sw_manifest_tags`（「将标签写入同步清单」，默认开）读写 `manifest_include_tags`，`loadConfig`/`saveConfig` 双向接线，只门控 `buildManifest` 写入
-- 测试连接/检查状态/上传/下载按钮跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；`btn_sync_push` 文本作进度占位；危险操作（删除本地/云端）先弹确认框
+- 测试连接/检查状态/危险操作（删除本地/云端）/孤儿清理跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；上传/下载走 `runCloudSync(isUpload)`：按 `show_upload_progress`/`show_download_progress` 弹共享进度对话框（`SyncProgressDialog`），完成后 Toast 摘要；`runSync(btnId, label, progressRes, block)` 恢复按钮文本并统一启停进度
 - 「删除本地所有」复用 `MemeDb.deleteAll` + 清理 cache/缩略图；「删除云端所有」遍历远端清单删除文件+清单
 - 网格间距：`item_meme.xml` 卡片 `layout_margin 5dp`（对应桌面端网格 `gap: 10px`）
 
@@ -220,6 +220,7 @@ Android/data/com.ohmymeme.app/
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
 - **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
+- **传输进度（meta 总量）**：`pull`/`push` 按待传条目预算 `files_total`（pull = 清单中安全且本地不存在；push = 待推列表）与 `bytes_total`（`StorFile.length` 之和），逐条目帧附带 `meta: {files_total, bytes_total}`（`pull_file`/`push_file`/`get_config`/`send_config`，纯增量协议旧端自动忽略；配置同步 `get_config` 为 1 文件 0 字节、`send_config` 按载荷字节数）；每条目 `finally { progress.report(transferred, filename) }` 保证恰好一次回调，供设置页进度对话框显示
 - **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序 → `CloudSync.applyRemoteCollections` 同步分组（递归子集合）→ `CloudSync.applyRemoteTags` 同步标签；任一检查不过即跳过计入 failed 且不落盘
 - **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签（条目内 `tags` 数组，受 `manifest_include_tags` 门控）
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
@@ -276,7 +277,7 @@ Android/data/com.ohmymeme.app/
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
 - 顶部快捷同步：主界面标题栏「更多」菜单提供上传/下载，一键 push/pull
-- 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要
+- 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要；进度对话框抽为共享组件 `SyncProgressUi.kt`（`SyncProgressDialog.show(activity, title)`/`progress`/`dismiss()`/`showDone()`，字节制百分比封顶 99、未知总量回退文件数），主界面 `quickSync`、设置页云端同步（`runCloudSync`）与局域网传输（`lanOp`/`configOp`/`runKeyOp`）共用；LAN 进度对话框不接 `show_*_progress` 开关（总是显示）
 - 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新目录，`persistDataTree` 校验后弹窗询问是否转移；SAF 全量支持（`StorFile` 经 content URI 读写 cache/thumbnails，`memes.db` 留在真实路径），只转移 cache/thumbnails 两个子目录，config.json 保持不变
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）

@@ -224,36 +224,8 @@ class MainActivity : AppCompatActivity() {
         val titleRes = if (isUpload) R.string.sync_pushing else R.string.sync_pulling
         val doneTitleRes = if (isUpload) R.string.sync_upload_done_title else R.string.sync_download_done_title
 
-        val syncProgress = CloudSync.SyncProgress()
-        var dialog: AlertDialog? = null
-        var inBackground = false
-        if (showProgress) {
-            val view = layoutInflater.inflate(R.layout.dialog_sync_progress, null)
-            view.findViewById<TextView>(R.id.sync_progress_title).text = getString(titleRes)
-            val bar = view.findViewById<ProgressBar>(R.id.sync_progress_bar)
-            val pct = view.findViewById<TextView>(R.id.sync_progress_pct)
-            val file = view.findViewById<TextView>(R.id.sync_progress_file)
-            view.findViewById<TextView>(R.id.btn_sync_bg).setOnClickListener {
-                inBackground = true
-                dialog?.dismiss()
-                dialog = null
-            }
-            syncProgress.onProgress = { p ->
-                runOnUiThread {
-                    if (inBackground || dialog == null) return@runOnUiThread
-                    val percent = if (p.filesTotal > 0) p.done() * 100 / p.filesTotal else 0
-                    bar.progress = percent
-                    pct.text = "$percent% · ${formatSpeed(p.bytesDone(), p.startTime)}"
-                    file.text = p.currentFile
-                }
-            }
-            dialog = AlertDialog.Builder(this)
-                .setView(view)
-                .setCancelable(false)
-                .create()
-            dialog?.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            dialog?.show()
-        }
+        val ui = if (showProgress) SyncProgressDialog.show(this, getString(titleRes)) else null
+        val syncProgress = ui?.progress ?: CloudSync.SyncProgress()
         syncExecutor.execute {
             try {
                 val result = if (isUpload) CloudSync.push(this, syncProgress)
@@ -261,49 +233,22 @@ class MainActivity : AppCompatActivity() {
                 android.util.Log.d(TAG, "quickSync ${if (isUpload) "push" else "pull"} result=$result")
                 runOnUiThread {
                     if (!isUpload) reloadData()
-                    if (!inBackground && showDone) {
-                        dialog?.dismiss()
-                        dialog = null
-                        showSyncDoneDialog(doneTitleRes, syncSummary(result))
-                        return@runOnUiThread
+                    val background = ui?.inBackground ?: false
+                    ui?.dismiss()
+                    if (!background && showDone) {
+                        SyncProgressDialog.showDone(this, getString(doneTitleRes), syncSummary(result))
+                    } else {
+                        toast(syncSummary(result))
                     }
-                    dialog?.dismiss()
-                    dialog = null
-                    toast(syncSummary(result))
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "quickSync ${if (isUpload) "push" else "pull"} failed: $e")
                 runOnUiThread {
-                    dialog?.dismiss()
-                    dialog = null
+                    ui?.dismiss()
                     toast(e.message ?: getString(R.string.sync_failed))
                 }
             }
         }
-    }
-
-    private fun formatSpeed(bytesDone: Long, startTime: Long): String {
-        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
-        if (elapsedSec <= 0.0) return "0 KB/s"
-        val bytesPerSec = bytesDone / elapsedSec
-        return if (bytesPerSec >= 1024.0 * 1024.0) {
-            String.format("%.1f MB/s", bytesPerSec / 1024.0 / 1024.0)
-        } else {
-            String.format("%.0f KB/s", bytesPerSec / 1024.0)
-        }
-    }
-
-    private fun showSyncDoneDialog(titleRes: Int, detail: String) {
-        val view = layoutInflater.inflate(R.layout.dialog_sync_done, null)
-        view.findViewById<TextView>(R.id.sync_done_title).text = getString(titleRes)
-        view.findViewById<TextView>(R.id.sync_done_detail).text = detail
-        val dialog = AlertDialog.Builder(this)
-            .setView(view)
-            .setCancelable(false)
-            .create()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        view.findViewById<TextView>(R.id.btn_sync_done_close).setOnClickListener { dialog.dismiss() }
-        dialog.show()
     }
 
     private fun syncSummary(r: CloudSync.SyncResult): String {
