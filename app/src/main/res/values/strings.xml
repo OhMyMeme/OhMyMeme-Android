@@ -112,6 +112,7 @@
     <string name="sync_auto_fetch">启动时自动获取远端索引</string>
     <string name="sync_auto_sync">启动时自动同步</string>
     <string name="settings_manifest_include_tags">将标签写入同步清单（meme-index.json）</string>
+    <string name="settings_manifest_include_favorites">将收藏夹写入同步清单（meme-index.json）</string>
     <string name="sync_storage_type">存储类型</string>
     <string name="sync_type_none">无</string>
     <string name="sync_type_ftp">FTP</string>

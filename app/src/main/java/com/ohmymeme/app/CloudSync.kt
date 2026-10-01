@@ -102,6 +102,7 @@ object CloudSync {
     internal fun buildManifest(ctx: Context): JSONObject {
         val db = MemeDb.get(ctx)
         val includeTags = ConfigStore.get(ctx).optBoolean("manifest_include_tags", true)
+        val includeFavorites = ConfigStore.get(ctx).optBoolean("manifest_include_favorites", true)
         val memes = JSONArray()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
             val entry = JSONObject()
@@ -120,10 +121,16 @@ object CloudSync {
             }
             memes.put(entry)
         }
-        return JSONObject()
+        val result = JSONObject()
             .put("version", MANIFEST_VERSION)
             .put("memes", memes)
             .put("collections", buildCollectionTree(ctx, null))
+        if (includeFavorites) {
+            val favs = JSONArray()
+            for (m in db.search(favoriteOnly = true, limit = Int.MAX_VALUE)) favs.put(m.filename)
+            result.put("favorite", favs)
+        }
+        return result
     }
 
     private fun buildCollectionTree(ctx: Context, parentId: Long?): JSONArray {
@@ -1370,6 +1377,7 @@ object CloudSync {
             }
             applyRemoteOrder(ctx, data)
             applyRemoteTags(ctx, data)
+            applyRemoteFavorites(ctx, data)
             return SyncResult(
                 downloaded = downloaded, skipped = skipped, errors = errors,
                 removedLocal = removed, failed = failed
@@ -1378,6 +1386,7 @@ object CloudSync {
         applyRemoteCollections(ctx, data)
         applyRemoteOrder(ctx, data)
         applyRemoteTags(ctx, data)
+        applyRemoteFavorites(ctx, data)
         if (errors > 0) {
             throw SyncError("$errors 个文件下载失败，本地清单仅包含成功项")
         }
@@ -1613,6 +1622,25 @@ object CloudSync {
             if (t.isNotEmpty()) out.add(t)
         }
         return out
+    }
+
+    internal fun favoriteFilenamesFrom(data: JSONObject): List<String> {
+        val arr = data.optJSONArray("favorite") ?: return emptyList()
+        val out = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val v = arr.opt(i) as? String ?: continue
+            if (!isSafeRemoteFname(v)) continue
+            out.add(v)
+        }
+        return out
+    }
+
+    internal fun applyRemoteFavorites(ctx: Context, data: JSONObject) {
+        val db = MemeDb.get(ctx)
+        for (fname in favoriteFilenamesFrom(data)) {
+            val row = db.getByFilename(fname) ?: continue
+            db.addFavorite(row.id)
+        }
     }
 
     internal fun applyRemoteOrder(ctx: Context, data: JSONObject) {

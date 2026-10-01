@@ -173,6 +173,8 @@ class SettingsActivity : AppCompatActivity() {
             cfg.optBoolean("sync_auto_sync", false)
         findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked =
             cfg.optBoolean("manifest_include_tags", true)
+        findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked =
+            cfg.optBoolean("manifest_include_favorites", true)
         findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked =
             cfg.optBoolean("sync_delete_remote", false)
         findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked =
@@ -904,6 +906,7 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
         ConfigStore.set(this, "manifest_include_tags", findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked)
+        ConfigStore.set(this, "manifest_include_favorites", findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked)
         ConfigStore.set(this, "sync_type", syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition])
         ConfigStore.set(this, "sync_delete_remote", findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked)
         ConfigStore.set(this, "sync_remove_local", findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked)

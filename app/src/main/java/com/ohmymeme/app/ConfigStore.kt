@@ -34,6 +34,7 @@ object ConfigStore {
         "sync_hide_upload_warning" to false,
         "sync_threads" to 3,
         "manifest_include_tags" to true,
+        "manifest_include_favorites" to true,
         "show_upload_progress" to true,
         "show_upload_done" to true,
         "show_download_progress" to true,

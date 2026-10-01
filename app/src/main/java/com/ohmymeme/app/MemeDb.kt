@@ -384,6 +384,10 @@ class MemeDb(context: Context) {
             .use { return it.moveToFirst() }
     }
 
+    fun addFavorite(memeId: Long) {
+        db.execSQL("INSERT OR IGNORE INTO favorites (meme_id) VALUES (?)", arrayOf(memeId))
+    }
+
     fun createCollection(name: String, parentId: Long? = null): Long {
         val values = ContentValues().apply {
             put("name", name)
