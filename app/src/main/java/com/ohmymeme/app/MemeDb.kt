@@ -352,14 +352,12 @@ class MemeDb(context: Context) {
     fun memeIdsWithAllTags(tags: List<String>): Set<Long> {
         if (tags.isEmpty()) return emptySet()
         val placeholders = tags.joinToString(",") { "?" }
-        val args = mutableListOf<String>()
-        args.addAll(tags)
-        args.add(tags.size.toString())
         val result = mutableSetOf<Long>()
         db.rawQuery(
             "SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
-                "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id HAVING COUNT(DISTINCT t.id) = ?",
-            args.toTypedArray()
+                "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id " +
+                "HAVING COUNT(DISTINCT t.id) = ${tags.size}",
+            tags.toTypedArray()
         ).use { cur ->
             while (cur.moveToNext()) result.add(cur.getLong(0))
         }
@@ -501,10 +499,9 @@ class MemeDb(context: Context) {
             where.add(
                 "m.id IN (SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
                     "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id " +
-                    "HAVING COUNT(DISTINCT t.id) = ?)"
+                    "HAVING COUNT(DISTINCT t.id) = ${tags.size})"
             )
             params.addAll(tags)
-            params.add(tags.size.toString())
         }
 
         if (collectionId != null) {
