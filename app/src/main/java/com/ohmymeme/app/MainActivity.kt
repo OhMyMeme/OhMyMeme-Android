@@ -12,6 +12,7 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -29,6 +30,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,11 +46,18 @@ class MainActivity : AppCompatActivity() {
     private var manageMode = false
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
+    private var sidebarSwipeActive = false
+    private var sidebarSwipeClosing = false
+    private var sidebarSwipeConsumeUp = false
+    private var sidebarSwipeX = 0f
+    private var sidebarSwipeY = 0f
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
         private const val COLLECTION_RECENT = -3L
         private const val COLLECTION_UNCATEGORIZED = -4L
+        private const val EDGE_SWIPE_START_DP = 16
+        private const val EDGE_SWIPE_DISTANCE_DP = 64
     }
 
     private val importLauncher =
@@ -384,6 +393,65 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.btn_sidebar)
             .setImageResource(if (open) R.drawable.ic_close else R.drawable.ic_sidebar)
     }
+
+    /** 边缘右滑打开侧栏 / 侧栏内左滑关闭（对齐桌面端侧栏条滑动手势），仅观察不拦截子视图 */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (detectSidebarSwipe(ev)) return true
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun detectSidebarSwipe(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val sidebar = findViewById<RecyclerView>(R.id.rv_sidebar)
+                sidebarSwipeClosing = sidebar.visibility == View.VISIBLE
+                sidebarSwipeConsumeUp = false
+                val loc = IntArray(2)
+                if (sidebarSwipeClosing) {
+                    sidebar.getLocationInWindow(loc)
+                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + sidebar.width
+                } else {
+                    findViewById<View>(android.R.id.content).getLocationInWindow(loc)
+                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + dp(EDGE_SWIPE_START_DP)
+                }
+                sidebarSwipeX = ev.x
+                sidebarSwipeY = ev.y
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> sidebarSwipeActive = false
+            MotionEvent.ACTION_MOVE -> {
+                if (sidebarSwipeActive) {
+                    val dx = ev.x - sidebarSwipeX
+                    val dy = ev.y - sidebarSwipeY
+                    if (abs(dx) >= dp(EDGE_SWIPE_DISTANCE_DP) && abs(dx) > abs(dy) &&
+                        ((sidebarSwipeClosing && dx < 0) || (!sidebarSwipeClosing && dx > 0))
+                    ) {
+                        sidebarSwipeActive = false
+                        sidebarSwipeConsumeUp = true
+                        toggleSidebar()
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                sidebarSwipeActive = false
+                if (sidebarSwipeConsumeUp) {
+                    sidebarSwipeConsumeUp = false
+                    // 触发滑动后给子视图派发 CANCEL 收尾（清按下态、不触发 click），吞掉 UP
+                    val cancel = MotionEvent.obtain(ev)
+                    cancel.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancel)
+                    cancel.recycle()
+                    return true
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                sidebarSwipeActive = false
+                sidebarSwipeConsumeUp = false
+            }
+        }
+        return false
+    }
+
+    private fun dp(v: Int): Float = v * resources.displayMetrics.density
 
     private fun toggleManageMode() {
         manageMode = !manageMode

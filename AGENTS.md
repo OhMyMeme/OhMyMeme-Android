@@ -139,7 +139,7 @@ Android/data/com.ohmymeme.app/
 
 ### 分组胶囊过滤（MainActivity.kt）
 - 顶栏标签行（`rv_tags`）点击标签过滤表情：多选叠加（`activeTags`，全含匹配 `memeIdsWithAllTags`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
-- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消
+- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消；**滑动手势**：侧栏收起时从屏幕左缘（≤16dp）右滑 ≥64dp 展开，展开时在侧栏内左滑 ≥64dp 收起（均要求水平主导），`MainActivity.dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP，避免滑动收起时误触分组行点击
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
 - 系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致

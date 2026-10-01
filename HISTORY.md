@@ -2,6 +2,8 @@
 
 ## 新增
 
+- **侧栏滑动手势** — 屏幕左缘（≤16dp）右滑 ≥64dp 展开侧栏，侧栏内左滑 ≥64dp 收起（均要求水平主导），对齐桌面端侧栏条滑动手势；`MainActivity.dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP，避免滑动收起时误触分组行点击
+
 - **同步与局域网传输进度弹窗** — 进度对话框抽为共享组件 `SyncProgressUi.kt`（`SyncProgressDialog`：字节制百分比封顶 99、未知总量回退文件数、实时速度、当前文件、「后台运行」；`dialog_sync_progress` meta 行拆为百分比 + 速度并排，对齐桌面端样式）；设置页云端上传/下载从按钮占位改为走进度对话框（受 `show_upload_progress`/`show_download_progress` 门控，`runCloudSync`）；局域网拉取/上传/配置/密钥同步（`lanOp`/`configOp`/`runKeyOp`）均弹进度对话框（总是显示，不接开关）
 - **局域网帧附带传输总量（meta）** — `LanClient.pull`/`push` 按待传条目预算 `files_total`/`bytes_total` 并逐条目帧附带 `meta: {files_total, bytes_total}`（`pull_file`/`push_file`/`get_config`/`send_config`，纯增量协议旧端自动忽略），电脑端累计实际收发量后在设置页显示进度；每条目 `finally` 中 `progress.report` 保证恰好一次回调
 - **标签随同步清单下发与合入（对齐桌面端）** — `CloudSync.buildManifest` 每条 `memes[]` 条目写入 `tags: [...]` 数组，受新增设置「将标签写入同步清单」（`manifest_include_tags`，默认开）门控，关闭时条目不含该键；不再输出顶层 `tag_map`，读侧仍兼容旧 `tag_map` 并回退；云 pull（`remove_local` 与正常两分支）新增 `applyRemoteTags`（原仅 LAN pull 调用），条目 `tags` 经新增 `MemeDb.mergeMemeTags` **并集只增**合入本地，本地独有标签与删除不同步，该步骤不受开关限制
