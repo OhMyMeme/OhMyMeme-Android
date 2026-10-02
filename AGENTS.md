@@ -56,7 +56,7 @@ app/src/main/
     MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 缩放 WebP / 转 GIF / 转隐写 GIF；copy_avoid_webp 开关走 avoidWebp（静态 WebP→PNG/JPG，动图回退原图）
     WebpAnim.kt         # 动画 WebP 解析（RIFF/VP8X/ANIM/ANMF 子块）+ 帧包装，供 WebP→GIF
     BackupManager.kt    # 设置页 ZIP 备份/恢复（db+config+cache+thumbnails，staging 校验防路径穿越）
-    CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）
+    CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）+ 云端直接使用（清单缓存/差集合并/点击下载/缩略图预取与补传）
     LanClient.kt        # 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话）
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API，24h TTL 启动自动检查）
     SetupGuideActivity.kt # 首次设置向导（5 步：欢迎/存储/复制/云同步/完成）
@@ -93,7 +93,7 @@ Android/data/com.ohmymeme.app/
 - 单例：`MemeDb.get(context)`，用 `applicationContext` 防泄漏
 
 ### 配置（ConfigStore.kt）
-- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false` 等）
+- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false`、`manifest_include_tags=true`、`manifest_include_favorites=true`、`cloud_direct=true`、`cloud_thumb_auto_push=true` 等）
 - `SECRET_KEYS` 6 个密钥字段（s3_access_key/s3_secret_key/r2_access_key_id/r2_secret_access_key/ftp_password/webdav_password）写入前加密、读取后解密
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
@@ -122,6 +122,7 @@ Android/data/com.ohmymeme.app/
 - 命名 `{meme_id}_{size}.png`，存在即复用（与桌面端一致）
 - `findMemeFile` 先查缓存根目录，再递归遍历，返回 `StorFile`（对应桌面端 `_find_meme_file`）
 - `getThumbBitmap(context, memeId, filename, size)` 读现有缩略图或生成：BitmapFactory `inSampleSize` 先按 2×size 降采样，再 createScaledBitmap 到 150×150，保存 PNG；缓存/缩略图均经 `StorFile` 读写（SAF content URI 或真实路径）
+- 云端直接使用辅助：`cloudThumbFile(sha256)` 指向 `thumbnails/{sha256}.webp`、`cloudThumbBitmap` 读云缩略图（文件缺失/解码失败回退占位）、`cloudThumbWebpBytes` 把原图缩放到最长边 150px（宽高比不变）编码 WebP q85（API≥30 走 `WEBP_LOSSY`，低版本 `LOSSY`），`decodeFit(bytes, maxEdge)` 为共用降采样解码
 
 ### 网格加载（MemeGridAdapter.kt）
 - 单线程 Executor 后台生成/解码缩略图，`img.tag = meme.id` 防列表复用错位
@@ -129,6 +130,8 @@ Android/data/com.ohmymeme.app/
 - 名称取 `original_name`，为空回退文件名去扩展名
 - **动图渲染**（对应桌面端 webui `m.is_animated && m.auto_play_gif`）：后台判 `isAnimatedFile`（`FileUtils.isAnimatedFile`：GIF89a 头或 RIFF+WEBP+ANIM；webp 直查 cache 根避免全目录遍历），且 `ConfigStore` 的 `auto_play_gif` 为 true 时用 `ImageDecoder` + `AnimatedImageDrawable`（`setTargetSampleSize` 目标 300）播放原图，否则用静态缩略图；动画解码失败回退缩略图
 - 右上角 badge：GIF / WebP（动图）/ 隐写导入（`fromStego==1`），`bg_badge.xml` 蓝底圆角
+- **云行分支**（`meme.cloud`）：点击直接交 `onItemClick`（整理模式不勾选、不发起分享前置；下载中点击被吞防重复触发）、长按吞掉（不弹菜单不启动拖拽），隐藏右上「⋯」按钮 / 勾选徽标 / 拖拽 handle，左下角 `tv_cloud_badge` 云朵图标角标（`ic_cloud` 白色描边 24dp + `bg_cloud_badge` 半透明黑圆底，18dp + 3.5dp padding，对齐桌面端 `.cloud-badge`）；缩略图走 `Thumbnailer.cloudThumbBitmap`（`thumbnails/{sha256}.webp`，缺则占位），动图不预解码播放
+- **下载遮罩与退场动画**：整卡 `cloud_mask`（`bg_cloud_mask` 半透明黑 8dp 圆角 + 「下载中…」，`item_meme.xml` 置于最顶层）；下载状态存 `MemeGridAdapter` 伴生对象 `downloadingIds`（跨 reloadData 重建 adapter 不丢，bind 时按 `meme.cloud && downloadingIds.contains(id)` 显隐并 `clipBounds=null` 复位）；`setDownloading(id, active)` 增删 + `notifyItemChanged`，`wipeDownloadingMask(id, onWiped)` 用 `ValueAnimator` 驱动 `clipBounds = Rect(0, top, w, h)` 自上而下 0.40s 擦除退场（holder 不可见时直接回调），动画结束清状态并回调 MainActivity 刷新+分享；下载失败即时摘遮罩
 - 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
 ### 长按右键菜单（MainActivity.kt）
@@ -139,16 +142,17 @@ Android/data/com.ohmymeme.app/
 
 ### 分组胶囊过滤（MainActivity.kt）
 - 顶栏标签行（`rv_tags`）点击标签过滤表情：多选叠加（`activeTags`，全含匹配 `memeIdsWithAllTags`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
-- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消
+- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消；**滑动手势**：侧栏收起时从屏幕左缘（≤16dp）右滑 ≥64dp 展开，展开时在侧栏内左滑 ≥64dp 收起（均要求水平主导），`MainActivity.dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP，避免滑动收起时误触分组行点击
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
 - 系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致
 
 ### 标签系统（MainActivity.kt + MemeDb.kt）
-- 长按菜单「打标签」（`act_tag`）→ `promptEditTags(meme)`：`dialog_tag_editor.xml`（输入框 + `rv_tag_list` + 已选摘要），输入框实时过滤已有标签（`getAllTags`），点选/取消多选，回车把当前输入文本作为新标签加入，保存走 `setMemeTags`
+- 长按菜单「打标签」（`act_tag`）→ `promptEditTags(meme)`：`dialog_tag_editor.xml`（输入框 + `rv_tag_list` + 已选摘要 + `tv_tag_empty` 空态提示），输入框实时过滤已有标签（`getAllTags`），点选/取消多选，回车把当前输入文本作为新标签加入，保存走 `setMemeTags`；`bind()` 按过滤结果切换空态提示可见性
 - `setMemeTags` 重写后新增孤儿标签清理（`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM meme_tags)`），对齐桌面端 `set_meme_tags` 的清理逻辑
 - 标签行过滤与分组/关键词叠加，全含匹配（`memeIdsWithAllTags(tags)` 逐标签 INTERSECT），对齐桌面端 `search_memes` 的 `tags` 参数
 - 批量打标签：整理模式操作栏「打标签」按钮 → `promptEditTagsInternal(ids, replace=false)`，在每个表情既有标签上追加所选（`getMemeTags(mid)+picked` 去重并集）；单张入口仍 `replace=true` 覆盖；批量保存后自动退出整理模式并刷新
+- 同步并入：`MemeDb.mergeMemeTags(memeId, tags)` 事务内 trim/去空/去重后 `INSERT OR IGNORE`，**只增不减**（不做孤儿清理，与 pull/LAN applyRemoteTags 并集语义配套）
 
 ### 整理模式（MainActivity.kt + MemeGridAdapter.kt）
 - 顶栏排序图标（`btn_sort_mode`，`ic_sort`，contentDescription「整理模式」）进入**整理模式（多选批量删除 + 拖拽排序共存）**，对齐桌面端多选操作栏
@@ -194,18 +198,25 @@ Android/data/com.ohmymeme.app/
 - **多线程 + 进度回调**（对齐桌面端 `sync_threads`，默认 3，1-8）：`push`/`pull` 分块并发（`chunkList` + `ThreadPoolExecutor`），每块 worker 独立 `createBackend`/`connect` 连接（对应桌面端 `_push_worker`/`_pull_worker` 独立后端）；worker 内跳过/成功/失败分别计数，单文件失败不影响其余；pull 下载后统一回主线程写 DB（避免多线程并发写 SQLite）
 - `SyncProgress` 线程安全计数类（`filesTotal`/`bytesTotal`/`report`/`done`/`bytesDone`/`currentFile`/`startTime`/`onProgress` 回调），worker 线程回调、UI 自行 `runOnUiThread`
 - 对齐桌面端 `sync.py` + `manifest.py`：远端目录 `memes/`（REMOTE_MEME_DIR）+ `meme-index.json`（INDEX_FILENAME，清单 version 3）；远端根：FTP→`ftp_path`、WebDAV→`webdav_path`、对象存储→空
-- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）
+- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）；**`tags: [...]` 数组随条目写入**（受设置 `manifest_include_tags` 门控，默认开；关闭时条目不含该键），不再输出顶层 `tag_map`（读侧仍兼容回退）；**顶层 `favorite` 文件名数组**（无收藏为 `[]`，取自 `db.search(favoriteOnly=true)`，受设置 `manifest_include_favorites` 门控，默认开；关闭时整个 `favorite` 键不写入）
 - 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置；**S3 兼容阿里云 OSS**：`signature_version="s3"` 走 SigV2 签名（HMAC-SHA1 + `Authorization: AWS ak:base64`，`signV2`），`addressing_style="virtual"` 走虚拟主机寻址 `https://bucket.endpoint/key`（`urlForKey`），默认即 V2+virtual（对齐桌面端 `config.py` 默认）；R2 强制 SigV4 + path 寻址不变；endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
 - `downloadIndex` 下载远端清单到 dataDir 临时文件再解析，失败清理；`writeTempIndex` 上传前写本地临时清单
 - `push`：本地清单与远端清单按 `filename+sha256` 比对，相同且远端文件存在则跳过；`sync_delete_remote` 时删除远端多余文件；成功后合并远端仍保留的孤儿项重建清单并上传；上传失败即抛 `SyncError` 不更新远端清单
 - **Backend 接口只接受真实 `File`**（`uploadFile(local: File)/downloadFile(remotePath, dest: File)` 三实现不变）；cache/thumbnails 在 SAF 模式下经 `StorFile` 读写，push 上传前 `StorFile.copyTo(context.cacheDir 临时文件)` 物化，pull 先下载到 `context.cacheDir` 临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除
-- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（超限文件跳过并删除临时文件、空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）
+- `pull`：下载清单→按哈希/文件存在跳过→下载缺失文件（超限文件跳过并删除临时文件、空文件计失败并清理）→`getByFilename` 无记录时读尺寸 `addMeme`；`sync_remove_local` 时删除本地多余文件+库记录+缩略图；`applyRemoteCollections` 按远端分组建集合并挂成员（顶层，含子集合的文件已并入父集合 filenames）；`applyRemoteOrder` 按远端 manifest 的 `memes` 顺序重排本地 `sort_order`（`reorderMemes`，`isSafeRemoteFname` 校验文件名），保留云端排序，避免再 push 覆盖远端顺序（对齐桌面端 `_apply_remote_order`，removeLocal 分支也执行）；`applyRemoteTags` 按条目 `tags`（缺失回退顶层 `tag_map`）经 `mergeMemeTags` **并集只增**合入本地（不清理本地独有标签，removeLocal 分支同样执行），不受 `manifest_include_tags` 开关限制；`applyRemoteFavorites` 按顶层 `favorite` 文件名数组（`favoriteFilenamesFrom` 纯函数过滤非字符串/`isSafeRemoteFname` 不安全名）经 `MemeDb.addFavorite`（`INSERT OR IGNORE`）**并集只增**合入本地收藏，removeLocal 分支同样执行，不受 `manifest_include_favorites` 开关限制
 - 公开 API：`syncTest`（返回 "ok" 或错误信息）、`checkSyncStatus`（返回本地/远端计数与仅本地/仅远端文件名摘要）、`push`/`pull`（返回 `SyncResult(uploaded/downloaded/skipped/errors/deleted/removedLocal/failed)`，失败抛 `SyncError`）、`deleteAllRemote`、`deleteAllLocal`
 - 单线程顺序执行（安卓端不做多线程分片）；同步配置读 `ConfigStore`（密钥字段已解密）
+- **云端直接使用（cloud_direct，默认开）**：主界面默认视图把远端 `memes/` 中尚未下载的表情合并展示（带「云」角标），仅在无关键词/标签/分组过滤的全局视图合并
+  - 清单缓存：`loadCloudManifest`（内存 → `dataDir/cloud-index.json` 文件双层，损坏/不存在回退 null）、`refreshCloudManifest`（`downloadIndex` 成功后写缓存，失败保留旧缓存）、`clearCloudCache`（`sync_type`/`cloud_direct` 变更时由设置页调用）
+  - 差集与合并：`cloudMissing`（`isSafeRemoteFname` + 64 位小写 `isSafeSha` 校验、跳过已本地文件名，携带条目 `tags`、`cloudCollectionPaths` 分组全路径、`favorite` 收藏）、`cloudMeme(CloudEntry)`（云行 id = `-(清单位置+1)` 负数，保证 adapter tag 与整理模式 id>0 过滤互不冲突）、`mergeCloudOrder`（不在清单的本地行按原序排最前，其余本地行与云行按清单序 `manifestOrder` 穿插，云行补到尾部）
+  - 预取与补传：`prefetchCloudThumbs`（差集下载 `thumbnails/{sha}.webp`，单张失败整体重试一遍）、`autoPushThumbs`（三重门控 `cloud_direct` + `cloud_thumb_auto_push` + `sync_type`；远端 `thumbnails/` listFiles 差集，缺失项用 `Thumbnailer.cloudThumbWebpBytes` 生成 150px WebP q85 上传，list 结果为空回退 `fileExists` 单查）
+  - 点击下载：`downloadCloudMeme(ctx, row)` 状态对齐桌面端 `download_meme`（`disabled`/`no_sync`/`not_found`/`busy` 防重入/`download_failed`/`sha_mismatch`/`too_large`/`invalid_image`/`ok`）：流式 SHA-256 比对 → `MemeImporter.MAX_BYTES`/`MAX_PX` 上限 → 按**清单文件名**去重入库（哈希命中复用已有本地行）→ `cloudBackfill` 后补标签（`mergeMemeTags` 并集）/ 分组链（逐段 `createCollection` 复用）/ 收藏（`addFavorite` INSERT OR IGNORE），返回 `CloudDownloadResult` 供主界面刷新 + 自动分享
 
 ### 设置页同步接线（SettingsActivity.kt）
 - `sp_sync_type` 位置→`sync_type` 映射：0 无 / 1 ftp / 2 s3 / 3 r2 / 4 webdav（`syncTypes` 列表）；`loadConfig` 回填 `setSelection`，`saveConfig` 写入
-- 测试连接/检查状态/上传/下载按钮跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；`btn_sync_push` 文本作进度占位；危险操作（删除本地/云端）先弹确认框
+- `sw_manifest_tags`（「将标签写入同步清单」，默认开）读写 `manifest_include_tags`，`loadConfig`/`saveConfig` 双向接线，只门控 `buildManifest` 写入；`sw_manifest_favorites`（「将收藏夹写入同步清单」，默认开）同理读写 `manifest_include_favorites`
+- 「云端直接使用」（`sw_cloud_direct`，默认开）读写 `cloud_direct`、「启动时自动上传缩略图到云端」（`sw_cloud_thumb_push`，默认开）读写 `cloud_thumb_auto_push`，`loadConfig`/`saveConfig` 双向接线；`saveConfig` 检测 `sync_type` 由空首次变为非空时先弹确认框「开启云端直接使用？」（「开启」= 勾选 cloud_direct、「关闭」= 取消勾选、取消/Esc 保持当前勾选，三个出口均经 `doSaveConfig` 落盘，对齐桌面端 `showConfirm`）；`doSaveConfig` 内 `sync_type` 或 `cloud_direct` 变更时调用 `CloudSync.clearCloudCache` 清清单缓存
+- 测试连接/检查状态/危险操作（删除本地/云端）/孤儿清理跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；上传/下载走 `runCloudSync(isUpload)`：按 `show_upload_progress`/`show_download_progress` 弹共享进度对话框（`SyncProgressDialog`），完成后 Toast 摘要；`runSync(btnId, label, progressRes, block)` 恢复按钮文本并统一启停进度
 - 「删除本地所有」复用 `MemeDb.deleteAll` + 清理 cache/缩略图；「删除云端所有」遍历远端清单删除文件+清单
 - 网格间距：`item_meme.xml` 卡片 `layout_margin 5dp`（对应桌面端网格 `gap: 10px`）
 
@@ -218,8 +229,9 @@ Android/data/com.ohmymeme.app/
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
 - **加密帧**：`[4B 大端长度][12B IV][AES-GCM 密文+16B tag]`；明文帧（握手期）`[4B 长度][JSON]`；`request(cmd, params)` 用 `synchronized(writeLock)` 保证请求/响应配对不交错
 - **命令**：`ping`/`pull_manifest`/`push_manifest`/`pull_file`/`push_file`/`get_config`/`send_config`/`device_info`
-- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序 → `CloudSync.applyRemoteCollections` 同步分组（递归子集合）→ `CloudSync.applyRemoteTags` 同步标签；任一检查不过即跳过计入 failed 且不落盘
-- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签（`buildManifest` 含 `tag_map` 字段）
+- **传输进度（meta 总量）**：`pull`/`push` 按待传条目预算 `files_total`（pull = 清单中安全且本地不存在；push = 待推列表）与 `bytes_total`（`StorFile.length` 之和），逐条目帧附带 `meta: {files_total, bytes_total}`（`pull_file`/`push_file`/`get_config`/`send_config`，纯增量协议旧端自动忽略；配置同步 `get_config` 为 1 文件 0 字节、`send_config` 按载荷字节数）；每条目 `finally { progress.report(transferred, filename) }` 保证恰好一次回调，供设置页进度对话框显示
+- **pull**：`pullManifest` → 遍历 `memes[]` 逐文件四重校验（文件名安全 `isSafeRemoteFname`、单文件 ≤20MiB `MemeImporter.MAX_BYTES`、清单 `sha256` 哈希一致、`MemeImporter.isValidImageContent` 魔数+可解码）→ 通过才 `getByFilename` 去重 → `pullFile` 字节 → `MemeImporter.importBytes`（内部同样先校验可解码再落盘，杜绝孤儿文件）→ `CloudSync.applyRemoteOrder` 回写本地排序 → `CloudSync.applyRemoteCollections` 同步分组（递归子集合）→ `CloudSync.applyRemoteTags` 同步标签 → `CloudSync.applyRemoteFavorites` 同步收藏（顶层 `favorite`，并集只增）；任一检查不过即跳过计入 failed 且不落盘
+- **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签/收藏（条目内 `tags` 数组受 `manifest_include_tags` 门控，顶层 `favorite` 受 `manifest_include_favorites` 门控）
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
 - **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
@@ -274,7 +286,7 @@ Android/data/com.ohmymeme.app/
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
 - 顶部快捷同步：主界面标题栏「更多」菜单提供上传/下载，一键 push/pull
-- 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要
+- 同步进度/完成弹窗：`quickSync` 走独立 `syncExecutor`（不占共享 executor，避免大文件同步卡 UI）；按 `show_upload_progress`/`show_download_progress` 显示 `dialog_sync_progress`（进度条/百分比/速度/当前文件/「后台运行」按钮），`show_upload_done`/`show_download_done` 控制 `dialog_sync_done` 完成弹窗；后台运行后仅 Toast 摘要；进度对话框抽为共享组件 `SyncProgressUi.kt`（`SyncProgressDialog.show(activity, title)`/`progress`/`dismiss()`/`showDone()`，字节制百分比封顶 99、未知总量回退文件数），主界面 `quickSync`、设置页云端同步（`runCloudSync`）与局域网传输（`lanOp`/`configOp`/`runKeyOp`）共用；LAN 进度对话框不接 `show_*_progress` 开关（总是显示）
 - 修改存储位置：设置页 `ACTION_OPEN_DOCUMENT_TREE` 选新目录，`persistDataTree` 校验后弹窗询问是否转移；SAF 全量支持（`StorFile` 经 content URI 读写 cache/thumbnails，`memes.db` 留在真实路径），只转移 cache/thumbnails 两个子目录，config.json 保持不变
 - 隐写 GIF 解码导入（STG3 检测 + 7 种模式还原，fixture 单测逐字节对齐 Pillow）
 - 小分组（子分组）创建与顶栏嵌套胶囊展示（1 层限制，长按分组胶囊新建 + 「加入小分组」）
@@ -288,12 +300,13 @@ Android/data/com.ohmymeme.app/
 - Logo 点击回主页：清 `activeTags`/`activeCollectionId`/搜索框并 `reloadData()`
 - 云端同步效率：FTP/WebDAV `push`/`pull` 用连接级 `ensuredDirs` 缓存远端目录、循环外仅 `ensureRemoteDir(memeDir)` 一次（消除逐文件 MKO/重复建目录）
 - 名称排序：`NameSorter`（数字感知 + 大小写不敏感，对齐桌面端 `_name_sort_key`）取代 SQL `ORDER BY name`
-- UI 视觉对齐桌面端 `style.css`：slate 色板、卡片 2dp 描边、按钮/input 4dp、弹窗 12dp 圆角描边、弹出菜单 8dp、状态栏+导航栏固定 `bg`、空状态插画+导入按钮、主按钮 `#1D4ED8`
+- UI 视觉对齐桌面端 `style.css`：slate 色板、卡片 2dp 描边、按钮/input 4dp、弹窗 12dp 圆角描边（`AlertDialog.OhMyMeme` 用 `android:windowBackground=@drawable/bg_dialog` 提供窗口圆角背景，`android:background` 不作用于窗口会露系统白角；按钮色走 `android:buttonBar*Style`（框架 AlertController 只认 android: 前缀）+ 兼容无前缀 appcompat 版本，标题 `android:windowTitleStyle` 17sp 加粗单行省略）、弹出菜单 8dp、状态栏+导航栏固定 `bg`、空状态插画+导入按钮、主按钮 `#1D4ED8`
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
 - 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）；拉取后同步分组（递归子集合）+ 标签
 - 「未分类」分组：顶栏胶囊显示未加入任何分组的表情（虚拟分组 `-4`，`MemeDb.search`/`count` 的 `uncategorizedOnly` 参数对应桌面端 `uncategorized_only`），计数 > 0 才显示、清零自动隐藏并退出视图；负数 id 使拖拽排序/长按分组菜单自动禁用；`CloudSync` 清单仅遍历真实 `collections` 表不受影响；设置页「显示『未分类』分组」开关（`show_uncategorized`，默认开，对齐桌面端 `config.py`/`settings.html`）
 - 控制中心快捷按钮：`QuickTileService`（`TileService`，manifest 声明 `BIND_QUICK_SETTINGS_TILE` + `quick_settings_tile.xml` 磁贴图标 `ic_qs_tile`），`onClick` 打开 MainActivity（锁屏先 `unlockAndRun`）；设置页「快捷开关」区块 + 「添加到控制中心」按钮弹添加指引（系统磁贴需用户在快捷设置编辑面板手动添加）
 - 长按拖拽发送（相册式）：`MemeGridAdapter` 长按卡片直接回调 `onDragStart` → `MainActivity.startGlobalDrag`：`materializeDragFile`（SAF 先 `stor.copyTo(cacheDir)` 物化，统一临时文件路径）→ `FileProvider.getUriForFile` → `ClipData.newUri` → `itemView.startDragAndDrop(DRAG_FLAG_GLOBAL or DRAG_FLAG_GLOBAL_URI_READ)` 跨应用拖入微信/QQ，同时 `recordUse`；`ACTION_DRAG_ENDED` 且未被接收（`!e.result`）时回调 `onDragFailed` 弹原右键菜单兜底；卡片右上角 `btn_meme_menu`（「⋯」）点击回调 `onMenuClick` 打开 `showMemeMenu`；注意鸿蒙/Huawei 上 `TYPE_APPLICATION_OVERLAY` 无法发起全局拖拽，因此拖拽必须由 Activity 窗口内的视图发起（曾用悬浮窗方案失败后改为相册式）；跨应用拖拽需真机验证（接收方是否支持图片拖放，失败有菜单兜底）
+- 云端直接使用（`cloud_direct`，默认开）：`ConfigStore` 新增 `cloud_direct`/`cloud_thumb_auto_push`，`Meme.kt` 新增 `cloud` 字段；`MainActivity.startCloudDirect` 启动先用清单缓存合并渲染云行（`reloadData` 默认视图走 `mergeCloudOrder`），后台刷新 `cloud-index.json` 清单重载，`syncExecutor` 依次预取云端缩略图与补传本地缩略图；点击云卡片 `downloadCloudMeme` 下载（先 `setDownloading` 显示整卡 `cloud_mask` 遮罩防重复点击）→ SHA-256/大小/尺寸校验 → 按清单文件名入库 → 后补标签/分组/收藏 → 成功经 `wipeDownloadingMask` 遮罩自上而下退场动画后刷新网格并自动走分享链路（失败即时摘遮罩）；长按云卡片/菜单/整理模式勾选/拖拽排序持久化均过滤负 id 云行（`id > 0`），设置页两个开关 + 首配存储类型「开启/关闭」确认弹窗；单测 `CloudDirectTest`（8 例：合并顺序、差集安全校验、标签/分组/收藏回填、负 id、清单序、sha 校验、默认键）
 
 ### 未实现（后续待做）
 - 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）

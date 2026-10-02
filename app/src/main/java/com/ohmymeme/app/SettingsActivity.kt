@@ -167,10 +167,18 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked =
             cfg.optBoolean("copy_avoid_webp", false)
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
+        findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked =
+            cfg.optBoolean("cloud_direct", true)
+        findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked =
+            cfg.optBoolean("cloud_thumb_auto_push", true)
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
             cfg.optBoolean("sync_auto_fetch_index", false)
         findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked =
             cfg.optBoolean("sync_auto_sync", false)
+        findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked =
+            cfg.optBoolean("manifest_include_tags", true)
+        findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked =
+            cfg.optBoolean("manifest_include_favorites", true)
         findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked =
             cfg.optBoolean("sync_delete_remote", false)
         findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked =
@@ -221,10 +229,14 @@ class SettingsActivity : AppCompatActivity() {
             loadConfig()
             toast(getString(R.string.config_reset))
         }
-        findViewById<TextView>(R.id.btn_test_connection).setOnClickListener { runSync(R.string.sync_testing) { CloudSync.syncTest(this) } }
-        findViewById<TextView>(R.id.btn_check_sync_status).setOnClickListener { runSync(R.string.sync_checking) { CloudSync.checkSyncStatus(this) } }
-        findViewById<TextView>(R.id.btn_sync_push).setOnClickListener { runSync(R.string.sync_pushing) { CloudSync.push(this) } }
-        findViewById<TextView>(R.id.btn_sync_pull).setOnClickListener { runSync(R.string.sync_pulling) { CloudSync.pull(this) } }
+        findViewById<TextView>(R.id.btn_test_connection).setOnClickListener {
+            runSync(R.id.btn_test_connection, R.string.sync_testing) { CloudSync.syncTest(this) }
+        }
+        findViewById<TextView>(R.id.btn_check_sync_status).setOnClickListener {
+            runSync(R.id.btn_check_sync_status, R.string.sync_checking) { CloudSync.checkSyncStatus(this) }
+        }
+        findViewById<TextView>(R.id.btn_sync_push).setOnClickListener { runCloudSync(isUpload = true) }
+        findViewById<TextView>(R.id.btn_sync_pull).setOnClickListener { runCloudSync(isUpload = false) }
         findViewById<TextView>(R.id.btn_sync_orphans).setOnClickListener { confirmCleanupOrphans() }
         findViewById<TextView>(R.id.btn_danger_local).setOnClickListener { confirmDeleteLocal() }
         findViewById<TextView>(R.id.btn_danger_cloud).setOnClickListener { confirmDeleteCloud() }
@@ -338,10 +350,10 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_lan_connect).setOnClickListener { connectLan() }
         findViewById<TextView>(R.id.btn_lan_direct).setOnClickListener { connectDirect() }
         findViewById<TextView>(R.id.btn_lan_pull).setOnClickListener {
-            lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { LanClient.pull(this, it) }
+            lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { c, p -> LanClient.pull(this, c, p) }
         }
         findViewById<TextView>(R.id.btn_lan_push).setOnClickListener {
-            lanOp(R.id.btn_lan_push, getString(R.string.btn_lan_push)) { LanClient.push(this, it) }
+            lanOp(R.id.btn_lan_push, getString(R.string.btn_lan_push)) { c, p -> LanClient.push(this, c, p) }
         }
         findViewById<TextView>(R.id.btn_lan_pull_config).setOnClickListener {
             configOp(pull = true)
@@ -369,7 +381,7 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    /** 配置同步：拉取（电脑→手机）或推送（手机→电脑）独立按钮，后台执行，弹 Toast 结果 */
+    /** 配置同步：拉取（电脑→手机）或推送（手机→电脑）独立按钮，进度对话框 + Toast 结果 */
     private fun configOp(pull: Boolean) {
         val conn = lanConnection
         if (conn == null) {
@@ -379,6 +391,8 @@ class SettingsActivity : AppCompatActivity() {
         val btnId = if (pull) R.id.btn_lan_pull_config else R.id.btn_lan_push_config
         val btn = findViewById<TextView>(btnId)
         btn.isEnabled = false
+        val label = getString(if (pull) R.string.btn_lan_pull_config else R.string.btn_lan_push_config)
+        val ui = SyncProgressDialog.show(this, label)
         Thread {
             try {
                 if (pull) {
@@ -391,7 +405,10 @@ class SettingsActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread { toast(e.message ?: "同步配置失败") }
             } finally {
-                runOnUiThread { btn.isEnabled = true }
+                runOnUiThread {
+                    ui.dismiss()
+                    btn.isEnabled = true
+                }
             }
         }.start()
     }
@@ -417,10 +434,12 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 密钥同步后台执行，弹 Toast 结果 */
+    /** 密钥同步后台执行，进度对话框 + Toast 结果 */
     private fun runKeyOp(btnId: Int, conn: LanClient.LanConnection, pull: Boolean) {
         val btn = findViewById<TextView>(btnId)
         btn.isEnabled = false
+        val label = getString(if (pull) R.string.btn_lan_pull_key else R.string.btn_lan_push_key)
+        val ui = SyncProgressDialog.show(this, label)
         Thread {
             try {
                 if (pull) {
@@ -433,7 +452,10 @@ class SettingsActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread { toast(e.message ?: "同步密钥失败") }
             } finally {
-                runOnUiThread { btn.isEnabled = true }
+                runOnUiThread {
+                    ui.dismiss()
+                    btn.isEnabled = true
+                }
             }
         }.start()
     }
@@ -538,7 +560,7 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun lanOp(btnId: Int, label: String, block: (LanClient.LanConnection) -> LanClient.LanResult) {
+    private fun lanOp(btnId: Int, label: String, block: (LanClient.LanConnection, CloudSync.SyncProgress) -> LanClient.LanResult) {
         val conn = lanConnection
         if (conn == null) {
             toast(getString(R.string.lan_status_disconnected))
@@ -547,13 +569,15 @@ class SettingsActivity : AppCompatActivity() {
         val btn = findViewById<TextView>(btnId)
         btn.isEnabled = false
         btn.text = label
+        val ui = SyncProgressDialog.show(this, label)
         Thread {
             val result = try {
-                block(conn)
+                block(conn, ui.progress)
             } catch (e: Exception) {
                 LanClient.LanResult(errors = 1, failed = listOf(e.message ?: "操作失败"))
             }
             runOnUiThread {
+                ui.dismiss()
                 btn.isEnabled = true
                 btn.text = when (btnId) {
                     R.id.btn_lan_pull -> getString(R.string.btn_lan_pull)
@@ -710,9 +734,9 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun runSync(progressRes: Int, block: () -> Any) {
+    private fun runSync(btnId: Int, progressRes: Int, block: () -> Any) {
         saveConfig()
-        val btn = findViewById<TextView>(R.id.btn_sync_push)
+        val btn = findViewById<TextView>(btnId)
         val original = btn.text.toString()
         btn.isEnabled = false
         btn.text = getString(progressRes)
@@ -728,6 +752,49 @@ class SettingsActivity : AppCompatActivity() {
                 when (result) {
                     is String -> toast(result)
                     is CloudSync.SyncResult -> toast(syncSummary(result))
+                    else -> toast(result.toString())
+                }
+            }
+        }.start()
+    }
+
+    /** 设置页云端上传/下载（进度条/完成弹窗对齐主界面 quickSync 与桌面端） */
+    private fun runCloudSync(isUpload: Boolean) {
+        saveConfig()
+        val cfg = ConfigStore.get(this)
+        val showProgress = cfg.optBoolean(
+            if (isUpload) "show_upload_progress" else "show_download_progress", true
+        )
+        val showDone = cfg.optBoolean(
+            if (isUpload) "show_upload_done" else "show_download_done", true
+        )
+        val title = getString(if (isUpload) R.string.sync_pushing else R.string.sync_pulling)
+        val doneTitle = getString(
+            if (isUpload) R.string.sync_upload_done_title else R.string.sync_download_done_title
+        )
+        val btn = findViewById<TextView>(if (isUpload) R.id.btn_sync_push else R.id.btn_sync_pull)
+        val ui = if (showProgress) SyncProgressDialog.show(this, title) else null
+        val progress = ui?.progress ?: CloudSync.SyncProgress()
+        btn.isEnabled = false
+        Thread {
+            val result = try {
+                if (isUpload) CloudSync.push(this, progress) else CloudSync.pull(this, progress)
+            } catch (e: Exception) {
+                e.message ?: "sync failed"
+            }
+            runOnUiThread {
+                btn.isEnabled = true
+                val background = ui?.inBackground ?: false
+                ui?.dismiss()
+                when (result) {
+                    is CloudSync.SyncResult -> {
+                        if (!background && showDone) {
+                            SyncProgressDialog.showDone(this, doneTitle, syncSummary(result))
+                        } else {
+                            toast(syncSummary(result))
+                        }
+                    }
+                    is String -> toast(result)
                     else -> toast(result.toString())
                 }
             }
@@ -754,7 +821,7 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle(getString(R.string.danger_title))
             .setMessage(getString(R.string.danger_delete_local))
             .setPositiveButton(getString(R.string.ctx_delete)) { _, _ ->
-                runSync(R.string.sync_testing) {
+                runSync(R.id.btn_danger_local, R.string.sync_testing) {
                     val n = CloudSync.deleteAllLocal(this)
                     "已删除本地 $n 个表情包"
                 }
@@ -768,7 +835,7 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle(getString(R.string.danger_title))
             .setMessage(getString(R.string.danger_delete_cloud))
             .setPositiveButton(getString(R.string.ctx_delete)) { _, _ ->
-                runSync(R.string.sync_testing) {
+                runSync(R.id.btn_danger_cloud, R.string.sync_testing) {
                     val (ok, msg) = CloudSync.deleteAllRemote(this)
                     if (ok) msg else "删除失败：$msg"
                 }
@@ -782,7 +849,7 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle(R.string.btn_sync_orphans)
             .setMessage(R.string.orphan_cleanup_confirm)
             .setPositiveButton(R.string.ok) { _, _ ->
-                runSync(R.string.sync_testing) {
+                runSync(R.id.btn_sync_orphans, R.string.sync_testing) {
                     val (ok, msg) = CloudSync.cleanupRemoteOrphans(this, delete = true)
                     if (ok) msg else "清理失败：$msg"
                 }
@@ -835,6 +902,33 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun saveConfig() {
+        val oldType = ConfigStore.get(this).optString("sync_type", "")
+        val newType = syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition]
+        if (oldType.isEmpty() && newType.isNotEmpty()) {
+            // 首次配置云端：询问是否开启「云端直接使用」（对齐桌面端 showConfirm 开启/关闭）
+            android.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.cloud_confirm_title))
+                .setMessage(getString(R.string.cloud_confirm_message))
+                .setPositiveButton(getString(R.string.cloud_enable)) { _, _ ->
+                    findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked = true
+                    doSaveConfig()
+                }
+                .setNegativeButton(getString(R.string.cloud_disable)) { _, _ ->
+                    findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked = false
+                    doSaveConfig()
+                }
+                .setOnCancelListener { doSaveConfig() }
+                .show()
+            return
+        }
+        doSaveConfig()
+    }
+
+    private fun doSaveConfig() {
+        val oldType = ConfigStore.get(this).optString("sync_type", "")
+        val oldCloudDirect = ConfigStore.get(this).optBoolean("cloud_direct", true)
+        val newType = syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition]
+        val newCloudDirect = findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked
         ConfigStore.set(this, "auto_play_gif", findViewById<SwitchMaterial>(R.id.sw_gif).isChecked)
         ConfigStore.set(this, "show_uncategorized", findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked)
         ConfigStore.set(this, "record_recent_use", findViewById<SwitchMaterial>(R.id.sw_record_recent).isChecked)
@@ -842,7 +936,11 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "copy_avoid_webp", findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked)
         ConfigStore.set(this, "sync_auto_fetch_index", findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked)
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
-        ConfigStore.set(this, "sync_type", syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition])
+        ConfigStore.set(this, "manifest_include_tags", findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked)
+        ConfigStore.set(this, "manifest_include_favorites", findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked)
+        ConfigStore.set(this, "cloud_direct", findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked)
+        ConfigStore.set(this, "cloud_thumb_auto_push", findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked)
+        ConfigStore.set(this, "sync_type", newType)
         ConfigStore.set(this, "sync_delete_remote", findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked)
         ConfigStore.set(this, "sync_remove_local", findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked)
         ConfigStore.set(this, "sync_hide_upload_warning", findViewById<SwitchMaterial>(R.id.sw_hide_upload_warn).isChecked)
@@ -880,6 +978,9 @@ class SettingsActivity : AppCompatActivity() {
 
         ConfigStore.save(this)
         ConfigStore.reload(this)
+        if (oldType != newType || oldCloudDirect != newCloudDirect) {
+            CloudSync.clearCloudCache(this)
+        }
         android.util.Log.d(TAG, "saveConfig done")
         toast(getString(R.string.config_saved))
     }

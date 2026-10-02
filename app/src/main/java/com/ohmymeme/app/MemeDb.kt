@@ -318,6 +318,29 @@ class MemeDb(context: Context) {
         return result
     }
 
+    fun mergeMemeTags(memeId: Long, tags: List<String>) {
+        val names = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (names.isEmpty()) return
+        db.beginTransaction()
+        try {
+            for (tag in names) {
+                db.execSQL("INSERT OR IGNORE INTO tags (name) VALUES (?)", arrayOf(tag))
+                val cur = db.rawQuery("SELECT id FROM tags WHERE name=?", arrayOf(tag))
+                val tagId: Long? = if (cur.moveToFirst()) cur.getLong(0) else null
+                cur.close()
+                if (tagId != null) {
+                    db.execSQL(
+                        "INSERT OR IGNORE INTO meme_tags (meme_id, tag_id) VALUES (?, ?)",
+                        arrayOf(memeId, tagId)
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun getAllTags(): List<String> {
         val result = mutableListOf<String>()
         db.rawQuery("SELECT name FROM tags ORDER BY name", null).use { cur ->
@@ -329,14 +352,12 @@ class MemeDb(context: Context) {
     fun memeIdsWithAllTags(tags: List<String>): Set<Long> {
         if (tags.isEmpty()) return emptySet()
         val placeholders = tags.joinToString(",") { "?" }
-        val args = mutableListOf<String>()
-        args.addAll(tags)
-        args.add(tags.size.toString())
         val result = mutableSetOf<Long>()
         db.rawQuery(
             "SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
-                "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id HAVING COUNT(DISTINCT t.id) = ?",
-            args.toTypedArray()
+                "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id " +
+                "HAVING COUNT(DISTINCT t.id) = ${tags.size}",
+            tags.toTypedArray()
         ).use { cur ->
             while (cur.moveToNext()) result.add(cur.getLong(0))
         }
@@ -359,6 +380,10 @@ class MemeDb(context: Context) {
     fun isFavorite(memeId: Long): Boolean {
         db.rawQuery("SELECT 1 FROM favorites WHERE meme_id=?", arrayOf(memeId.toString()))
             .use { return it.moveToFirst() }
+    }
+
+    fun addFavorite(memeId: Long) {
+        db.execSQL("INSERT OR IGNORE INTO favorites (meme_id) VALUES (?)", arrayOf(memeId))
     }
 
     fun createCollection(name: String, parentId: Long? = null): Long {
@@ -474,10 +499,9 @@ class MemeDb(context: Context) {
             where.add(
                 "m.id IN (SELECT mt.meme_id FROM meme_tags mt JOIN tags t ON t.id = mt.tag_id " +
                     "WHERE t.name IN ($placeholders) GROUP BY mt.meme_id " +
-                    "HAVING COUNT(DISTINCT t.id) = ?)"
+                    "HAVING COUNT(DISTINCT t.id) = ${tags.size})"
             )
             params.addAll(tags)
-            params.add(tags.size.toString())
         }
 
         if (collectionId != null) {

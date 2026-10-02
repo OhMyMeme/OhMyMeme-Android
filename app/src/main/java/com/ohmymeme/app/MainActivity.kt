@@ -12,6 +12,7 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -29,6 +30,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,11 +46,18 @@ class MainActivity : AppCompatActivity() {
     private var manageMode = false
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
+    private var sidebarSwipeActive = false
+    private var sidebarSwipeClosing = false
+    private var sidebarSwipeConsumeUp = false
+    private var sidebarSwipeX = 0f
+    private var sidebarSwipeY = 0f
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
         private const val COLLECTION_RECENT = -3L
         private const val COLLECTION_UNCATEGORIZED = -4L
+        private const val EDGE_SWIPE_START_DP = 16
+        private const val EDGE_SWIPE_DISTANCE_DP = 64
     }
 
     private val importLauncher =
@@ -69,7 +78,7 @@ class MainActivity : AppCompatActivity() {
         }
     private val settingsLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) reloadData()
+            if (result.resultCode == RESULT_OK) startCloudDirect()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,8 +91,38 @@ class MainActivity : AppCompatActivity() {
         setupSearch()
         ensureFirstRunSetup()
         autoSyncIfConfigured()
+        startCloudDirect()
         autoUpdateIfDue()
         handleIncomingIntent(intent)
+    }
+
+    /** 云端直接使用：先用缓存清单渲染云行，再后台刷新清单/预取缩略图/补传缩略图 */
+    private fun startCloudDirect() {
+        reloadData()
+        val cfg = ConfigStore.get(this)
+        val on = cfg.optBoolean("cloud_direct", true) &&
+            cfg.optString("sync_type", "").isNotEmpty()
+        if (!on) return
+        executor.execute {
+            try {
+                CloudSync.refreshCloudManifest(this)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "cloud manifest refresh failed: $e")
+            }
+            runOnUiThread { reloadData() }
+            syncExecutor.execute {
+                try {
+                    CloudSync.prefetchCloudThumbs(this)
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "cloud thumb prefetch failed: $e")
+                }
+                try {
+                    CloudSync.autoPushThumbs(this)
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "cloud thumb auto-push failed: $e")
+                }
+            }
+        }
     }
 
     /** 启动自动检查更新：24h 内只检查一次，有新版才弹窗（对齐桌面端启动检查） */
@@ -224,36 +263,8 @@ class MainActivity : AppCompatActivity() {
         val titleRes = if (isUpload) R.string.sync_pushing else R.string.sync_pulling
         val doneTitleRes = if (isUpload) R.string.sync_upload_done_title else R.string.sync_download_done_title
 
-        val syncProgress = CloudSync.SyncProgress()
-        var dialog: AlertDialog? = null
-        var inBackground = false
-        if (showProgress) {
-            val view = layoutInflater.inflate(R.layout.dialog_sync_progress, null)
-            view.findViewById<TextView>(R.id.sync_progress_title).text = getString(titleRes)
-            val bar = view.findViewById<ProgressBar>(R.id.sync_progress_bar)
-            val pct = view.findViewById<TextView>(R.id.sync_progress_pct)
-            val file = view.findViewById<TextView>(R.id.sync_progress_file)
-            view.findViewById<TextView>(R.id.btn_sync_bg).setOnClickListener {
-                inBackground = true
-                dialog?.dismiss()
-                dialog = null
-            }
-            syncProgress.onProgress = { p ->
-                runOnUiThread {
-                    if (inBackground || dialog == null) return@runOnUiThread
-                    val percent = if (p.filesTotal > 0) p.done() * 100 / p.filesTotal else 0
-                    bar.progress = percent
-                    pct.text = "$percent% · ${formatSpeed(p.bytesDone(), p.startTime)}"
-                    file.text = p.currentFile
-                }
-            }
-            dialog = AlertDialog.Builder(this)
-                .setView(view)
-                .setCancelable(false)
-                .create()
-            dialog?.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            dialog?.show()
-        }
+        val ui = if (showProgress) SyncProgressDialog.show(this, getString(titleRes)) else null
+        val syncProgress = ui?.progress ?: CloudSync.SyncProgress()
         syncExecutor.execute {
             try {
                 val result = if (isUpload) CloudSync.push(this, syncProgress)
@@ -261,49 +272,22 @@ class MainActivity : AppCompatActivity() {
                 android.util.Log.d(TAG, "quickSync ${if (isUpload) "push" else "pull"} result=$result")
                 runOnUiThread {
                     if (!isUpload) reloadData()
-                    if (!inBackground && showDone) {
-                        dialog?.dismiss()
-                        dialog = null
-                        showSyncDoneDialog(doneTitleRes, syncSummary(result))
-                        return@runOnUiThread
+                    val background = ui?.inBackground ?: false
+                    ui?.dismiss()
+                    if (!background && showDone) {
+                        SyncProgressDialog.showDone(this, getString(doneTitleRes), syncSummary(result))
+                    } else {
+                        toast(syncSummary(result))
                     }
-                    dialog?.dismiss()
-                    dialog = null
-                    toast(syncSummary(result))
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "quickSync ${if (isUpload) "push" else "pull"} failed: $e")
                 runOnUiThread {
-                    dialog?.dismiss()
-                    dialog = null
+                    ui?.dismiss()
                     toast(e.message ?: getString(R.string.sync_failed))
                 }
             }
         }
-    }
-
-    private fun formatSpeed(bytesDone: Long, startTime: Long): String {
-        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
-        if (elapsedSec <= 0.0) return "0 KB/s"
-        val bytesPerSec = bytesDone / elapsedSec
-        return if (bytesPerSec >= 1024.0 * 1024.0) {
-            String.format("%.1f MB/s", bytesPerSec / 1024.0 / 1024.0)
-        } else {
-            String.format("%.0f KB/s", bytesPerSec / 1024.0)
-        }
-    }
-
-    private fun showSyncDoneDialog(titleRes: Int, detail: String) {
-        val view = layoutInflater.inflate(R.layout.dialog_sync_done, null)
-        view.findViewById<TextView>(R.id.sync_done_title).text = getString(titleRes)
-        view.findViewById<TextView>(R.id.sync_done_detail).text = detail
-        val dialog = AlertDialog.Builder(this)
-            .setView(view)
-            .setCancelable(false)
-            .create()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        view.findViewById<TextView>(R.id.btn_sync_done_close).setOnClickListener { dialog.dismiss() }
-        dialog.show()
     }
 
     private fun syncSummary(r: CloudSync.SyncResult): String {
@@ -440,6 +424,65 @@ class MainActivity : AppCompatActivity() {
             .setImageResource(if (open) R.drawable.ic_close else R.drawable.ic_sidebar)
     }
 
+    /** 边缘右滑打开侧栏 / 侧栏内左滑关闭（对齐桌面端侧栏条滑动手势），仅观察不拦截子视图 */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (detectSidebarSwipe(ev)) return true
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun detectSidebarSwipe(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val sidebar = findViewById<RecyclerView>(R.id.rv_sidebar)
+                sidebarSwipeClosing = sidebar.visibility == View.VISIBLE
+                sidebarSwipeConsumeUp = false
+                val loc = IntArray(2)
+                if (sidebarSwipeClosing) {
+                    sidebar.getLocationInWindow(loc)
+                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + sidebar.width
+                } else {
+                    findViewById<View>(android.R.id.content).getLocationInWindow(loc)
+                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + dp(EDGE_SWIPE_START_DP)
+                }
+                sidebarSwipeX = ev.x
+                sidebarSwipeY = ev.y
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> sidebarSwipeActive = false
+            MotionEvent.ACTION_MOVE -> {
+                if (sidebarSwipeActive) {
+                    val dx = ev.x - sidebarSwipeX
+                    val dy = ev.y - sidebarSwipeY
+                    if (abs(dx) >= dp(EDGE_SWIPE_DISTANCE_DP) && abs(dx) > abs(dy) &&
+                        ((sidebarSwipeClosing && dx < 0) || (!sidebarSwipeClosing && dx > 0))
+                    ) {
+                        sidebarSwipeActive = false
+                        sidebarSwipeConsumeUp = true
+                        toggleSidebar()
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                sidebarSwipeActive = false
+                if (sidebarSwipeConsumeUp) {
+                    sidebarSwipeConsumeUp = false
+                    // 触发滑动后给子视图派发 CANCEL 收尾（清按下态、不触发 click），吞掉 UP
+                    val cancel = MotionEvent.obtain(ev)
+                    cancel.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancel)
+                    cancel.recycle()
+                    return true
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                sidebarSwipeActive = false
+                sidebarSwipeConsumeUp = false
+            }
+        }
+        return false
+    }
+
+    private fun dp(v: Int): Float = v * resources.displayMetrics.density
+
     private fun toggleManageMode() {
         manageMode = !manageMode
         if (manageMode) {
@@ -480,7 +523,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectAll() {
         val adapter = findViewById<RecyclerView>(R.id.rv_memes).adapter as? MemeGridAdapter ?: return
-        val all = adapter.currentIds()
+        val all = adapter.currentIds().filter { it > 0 }
         selectedIds.clear()
         selectedIds.addAll(all)
         updateManageBar()
@@ -488,6 +531,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleSelect(meme: Meme, pos: Int = -1) {
+        if (meme.cloud) return
         if (selectedIds.contains(meme.id)) selectedIds.remove(meme.id)
         else selectedIds.add(meme.id)
         updateManageBar()
@@ -855,6 +899,22 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             android.util.Log.d(TAG, "reloadData got ${memes.size} memes keyword='$keyword'")
+            var display = memes
+            val cloudDirect = ConfigStore.get(this).optBoolean("cloud_direct", true)
+            if (cloudDirect && keyword.isEmpty() && tags.isEmpty() && collectionId == null) {
+                val cloud = try {
+                    CloudSync.cloudRows(this)
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "cloud rows failed: $e")
+                    emptyList()
+                }
+                if (cloud.isNotEmpty()) {
+                    display = CloudSync.mergeCloudOrder(
+                        memes, cloud, CloudSync.manifestOrderCached(this)
+                    )
+                }
+            }
+            val rows = display
             runOnUiThread {
                 if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
@@ -862,8 +922,8 @@ class MainActivity : AppCompatActivity() {
                     rv.setPadding(12, 12, 12, if (manageMode) 76 else 12)
                     (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
                     rv.setTag(R.id.tag_sort_helper, null)
-                    val canOrder = (manageMode || sortModeEnabled) && memes.size >= 2
-                    val adapter = MemeGridAdapter(this, memes, canOrder, manageMode, selectedIds).apply {
+                    val canOrder = (manageMode || sortModeEnabled) && rows.size >= 2
+                    val adapter = MemeGridAdapter(this, rows, canOrder, manageMode, selectedIds).apply {
                         onItemClick = { _, meme -> onMemeClick(meme) }
                         onSelectToggle = { meme, pos -> toggleSelect(meme, pos) }
                         onMenuClick = { anchor, meme -> showMemeMenu(anchor, meme) }
@@ -877,12 +937,13 @@ class MainActivity : AppCompatActivity() {
                     rv.setTag(R.id.tag_sort_helper, helper)
                 }
                 findViewById<View>(R.id.empty_state).visibility =
-                    if (memes.isEmpty()) View.VISIBLE else View.GONE
+                    if (rows.isEmpty()) View.VISIBLE else View.GONE
             }
         }
     }
 
     private fun showMemeMenu(anchor: View, meme: Meme) {
+        if (meme.cloud) return
         val popup = PopupMenu(this, anchor)
         popup.menuInflater.inflate(R.menu.menu_meme, popup.menu)
         val favorited = MemeDb.get(this).isFavorite(meme.id)
@@ -977,6 +1038,8 @@ class MainActivity : AppCompatActivity() {
                     bind()
                 }
             }
+            view.findViewById<TextView>(R.id.tv_tag_empty).visibility =
+                if (filtered.isEmpty()) View.VISIBLE else View.GONE
             val selText = view.findViewById<TextView>(R.id.tv_tag_selected)
             selText.visibility = if (selected.isEmpty()) View.GONE else View.VISIBLE
             selText.text = getString(R.string.tag_selected_label) + selected.sorted().joinToString("、")
@@ -1114,9 +1177,54 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onMemeClick(meme: Meme) {
+        if (meme.cloud) {
+            downloadCloudMeme(meme)
+            return
+        }
         recordUse(meme)
         shareMeme(meme)
     }
+
+    /** 云卡片点击：后台下载校验入库后刷新网格并自动分享 */
+    private fun downloadCloudMeme(meme: Meme) {
+        toast(getString(R.string.cloud_downloading))
+        currentGridAdapter()?.setDownloading(meme.id, true)
+        syncExecutor.execute {
+            val r = CloudSync.downloadCloudMeme(this, meme.filename)
+            runOnUiThread {
+                val finishOk: () -> Unit = {
+                    reloadData()
+                    r.meme?.let {
+                        recordUse(it)
+                        shareMeme(it)
+                    }
+                }
+                when (r.status) {
+                    "ok" -> {
+                        toast(getString(R.string.cloud_downloaded))
+                        val grid = currentGridAdapter()
+                        if (grid != null) grid.wipeDownloadingMask(meme.id, finishOk) else finishOk()
+                    }
+                    else -> {
+                        currentGridAdapter()?.setDownloading(meme.id, false)
+                        when (r.status) {
+                            "disabled" -> toast(getString(R.string.cloud_disabled))
+                            "no_sync" -> toast(getString(R.string.cloud_no_sync))
+                            "not_found" -> toast(getString(R.string.cloud_not_found))
+                            "busy" -> toast(getString(R.string.cloud_busy))
+                            "sha_mismatch" -> toast(getString(R.string.cloud_sha_mismatch))
+                            "too_large" -> toast(getString(R.string.cloud_too_large))
+                            "invalid_image" -> toast(getString(R.string.cloud_invalid_image))
+                            else -> toast(getString(R.string.cloud_download_failed))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun currentGridAdapter(): MemeGridAdapter? =
+        findViewById<RecyclerView>(R.id.rv_memes).adapter as? MemeGridAdapter
 
     private fun shareMeme(meme: Meme) {
         executor.execute {
@@ -1416,7 +1524,8 @@ class MainActivity : AppCompatActivity() {
             viewHolder: RecyclerView.ViewHolder
         ) {
             super.clearView(recyclerView, viewHolder)
-            val ids = adapter.currentIds()
+            val ids = adapter.currentIds().filter { it > 0 }
+            if (ids.isEmpty()) return
             executor.execute {
                 if (collectionId != null && collectionId > 0) {
                     MemeDb.get(this@MainActivity).reorderCollectionMembers(collectionId, ids)

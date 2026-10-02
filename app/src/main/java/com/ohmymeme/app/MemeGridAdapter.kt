@@ -1,7 +1,11 @@
 package com.ohmymeme.app
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.ImageDecoder
+import android.graphics.Rect
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.view.DragEvent
@@ -9,6 +13,7 @@ import android.view.MotionEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AccelerateInterpolator
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
@@ -25,6 +30,7 @@ class MemeGridAdapter(
 
     private val items: MutableList<Meme> = items.toMutableList()
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var attachedRecycler: RecyclerView? = null
 
     var onItemClick: ((View, Meme) -> Unit)? = null
     var onSelectToggle: ((Meme, Int) -> Unit)? = null
@@ -44,6 +50,54 @@ class MemeGridAdapter(
 
     fun itemsByIds(ids: Collection<Long>): List<Meme> = items.filter { ids.contains(it.id) }
 
+    /** 云端下载状态用伴生对象，跨 adapter 实例（reloadData 重建）保持遮罩与防连点 */
+    fun setDownloading(id: Long, active: Boolean) {
+        if (active) downloadingIds.add(id) else downloadingIds.remove(id)
+        val pos = items.indexOfFirst { it.id == id }
+        if (pos >= 0) notifyItemChanged(pos)
+    }
+
+    /** 下载完成：遮罩自上而下退场动画，结束后回调刷新（holder 不可见时直接回调） */
+    fun wipeDownloadingMask(id: Long, onWiped: () -> Unit) {
+        val pos = items.indexOfFirst { it.id == id }
+        val holder = pos.takeIf { it >= 0 }
+            ?.let { attachedRecycler?.findViewHolderForAdapterPosition(it) as? MemeViewHolder }
+        val mask = holder?.itemView?.findViewById<TextView>(R.id.cloud_mask)
+        if (mask == null || mask.visibility != View.VISIBLE || mask.height == 0) {
+            downloadingIds.remove(id)
+            onWiped()
+            return
+        }
+        val h = mask.height
+        ValueAnimator.ofInt(0, h).apply {
+            duration = 400
+            interpolator = AccelerateInterpolator()
+            addUpdateListener {
+                val top = it.animatedValue as Int
+                mask.clipBounds = Rect(0, top, mask.width, h)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    downloadingIds.remove(id)
+                    mask.clipBounds = null
+                    mask.visibility = View.GONE
+                    onWiped()
+                }
+            })
+            start()
+        }
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        attachedRecycler = recyclerView
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        super.onDetachedFromRecyclerView(recyclerView)
+        attachedRecycler = null
+    }
+
     class MemeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MemeViewHolder {
@@ -56,6 +110,8 @@ class MemeGridAdapter(
         val img = holder.itemView.findViewById<ImageView>(R.id.img_meme)
         val name = holder.itemView.findViewById<TextView>(R.id.tv_meme_name)
         val badge = holder.itemView.findViewById<TextView>(R.id.tv_meme_badge)
+        val cloudBadge = holder.itemView.findViewById<ImageView>(R.id.tv_cloud_badge)
+        val cloudMask = holder.itemView.findViewById<TextView>(R.id.cloud_mask)
         val dragHandle = holder.itemView.findViewById<ImageView>(R.id.btn_drag_handle)
         val menuButton = holder.itemView.findViewById<View>(R.id.btn_meme_menu)
         val selectCheck = holder.itemView.findViewById<TextView>(R.id.tv_select_check)
@@ -64,15 +120,25 @@ class MemeGridAdapter(
         img.setColorFilter(context.getColor(R.color.muted))
         img.tag = meme.id
         name.text = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
+        badge.visibility = View.GONE
+        badge.text = ""
+        cloudBadge.visibility = if (meme.cloud) View.VISIBLE else View.GONE
+        cloudMask.clipBounds = null
+        cloudMask.visibility =
+            if (meme.cloud && downloadingIds.contains(meme.id)) View.VISIBLE else View.GONE
         holder.itemView.setOnClickListener {
-            if (manageMode) onSelectToggle?.invoke(meme, holder.bindingAdapterPosition) else onItemClick?.invoke(it, meme)
+            if (meme.cloud && downloadingIds.contains(meme.id)) return@setOnClickListener
+            if (manageMode && !meme.cloud) onSelectToggle?.invoke(meme, holder.bindingAdapterPosition)
+            else onItemClick?.invoke(it, meme)
         }
         holder.itemView.setOnLongClickListener {
-            if (manageMode) {
-                false
-            } else {
-                onDragStart?.invoke(it, meme)
-                true
+            when {
+                meme.cloud -> true
+                manageMode -> false
+                else -> {
+                    onDragStart?.invoke(it, meme)
+                    true
+                }
             }
         }
         holder.itemView.setOnDragListener { v, e ->
@@ -81,16 +147,17 @@ class MemeGridAdapter(
             }
             true
         }
-        menuButton.visibility = if (manageMode) View.GONE else View.VISIBLE
+        menuButton.visibility = if (manageMode || meme.cloud) View.GONE else View.VISIBLE
         menuButton.setOnClickListener {
             onMenuClick?.invoke(it, meme)
         }
         menuButton.setOnLongClickListener { true }
         selectCheck.visibility =
-            if (manageMode && selectedIds.contains(meme.id)) View.VISIBLE else View.GONE
-        dragHandle.visibility = if (canOrder || manageMode) View.VISIBLE else View.GONE
+            if (manageMode && !meme.cloud && selectedIds.contains(meme.id)) View.VISIBLE else View.GONE
+        dragHandle.visibility =
+            if (!meme.cloud && (canOrder || manageMode)) View.VISIBLE else View.GONE
         dragHandle.setOnTouchListener(null)
-        if (canOrder || manageMode) {
+        if (!meme.cloud && (canOrder || manageMode)) {
             dragHandle.setOnTouchListener { _, event ->
                 if (event.action != MotionEvent.ACTION_DOWN) return@setOnTouchListener true
                 if (holder.bindingAdapterPosition == RecyclerView.NO_POSITION) {
@@ -101,6 +168,10 @@ class MemeGridAdapter(
             }
         }
         executor.execute {
+            if (meme.cloud) {
+                loadCloudThumb(img, meme)
+                return@execute
+            }
             val animated = isAnimatedFile(meme)
             val isGif = meme.mimeType.endsWith("gif") || meme.filename.lowercase().endsWith(".gif")
             img.post {
@@ -179,6 +250,19 @@ class MemeGridAdapter(
         }
     }
 
+    private fun loadCloudThumb(img: ImageView, meme: Meme) {
+        val bitmap = Thumbnailer.cloudThumbBitmap(context, meme.fileHash)
+        if (bitmap != null && img.tag == meme.id) {
+            img.post {
+                if (img.tag == meme.id) {
+                    img.setColorFilter(null)
+                    img.setImageTintList(null)
+                    img.setImageBitmap(bitmap)
+                }
+            }
+        }
+    }
+
     private fun sampleSize(w: Int, h: Int, target: Int): Int {
         var sample = 1
         while (w / sample > target * 2 || h / sample > target * 2) {
@@ -188,4 +272,8 @@ class MemeGridAdapter(
     }
 
     override fun getItemCount() = items.size
+
+    companion object {
+        val downloadingIds: MutableSet<Long> = mutableSetOf()
+    }
 }

@@ -136,11 +136,25 @@ object LanClient {
      * 从电脑拉取表情：pull_manifest → 去重 → pull_file 逐文件导入 → applyRemoteOrder。
      * 每个文件先过合法性检查（文件名安全 / 大小上限 / 哈希一致 / 内容可解码），
      * 不合法跳过计入 failed 且不落盘。阻塞，勿在主线程调用。
+     * `progress` 可选；每个 pull_file 请求附带 `meta` 总量（电脑端进度条数据源）。
      */
-    fun pull(context: Context, conn: LanConnection): LanResult {
+    fun pull(context: Context, conn: LanConnection, progress: CloudSync.SyncProgress? = null): LanResult {
         val db = MemeDb.get(context)
         val manifest = conn.pullManifest()
         val remoteArr = manifest.optJSONArray("memes") ?: JSONArray()
+        var filesTotal = 0
+        var bytesTotal = 0L
+        for (i in 0 until remoteArr.length()) {
+            val m = remoteArr.optJSONObject(i) ?: continue
+            val fname = m.optString("filename", "")
+            if (!CloudSync.isSafeRemoteFname(fname)) continue
+            if (db.getByFilename(fname) != null) continue
+            filesTotal++
+            bytesTotal += m.optLong("file_size", 0L)
+        }
+        progress?.filesTotal = filesTotal
+        progress?.bytesTotal = bytesTotal
+        val meta = JSONObject().put("files_total", filesTotal).put("bytes_total", bytesTotal)
         var pulled = 0
         var skipped = 0
         var errors = 0
@@ -158,8 +172,10 @@ object LanClient {
                 skipped++
                 continue
             }
+            var transferred = 0L
             try {
-                val data = conn.pullFile(fname)
+                val data = conn.pullFile(fname, meta)
+                transferred = data.size.toLong()
                 if (data.size.toLong() > MemeImporter.MAX_BYTES) {
                     errors++
                     failed.add(fname)
@@ -194,20 +210,23 @@ object LanClient {
                 android.util.Log.w(TAG, "pull file failed $fname: $e")
                 errors++
                 failed.add(fname)
+            } finally {
+                progress?.report(transferred, fname)
             }
         }
         CloudSync.applyRemoteOrder(context, manifest)
         CloudSync.applyRemoteCollections(context, manifest)
         CloudSync.applyRemoteTags(context, manifest)
+        CloudSync.applyRemoteFavorites(context, manifest)
         android.util.Log.d(TAG, "lan pull done pulled=$pulled skipped=$skipped errors=$errors")
         return LanResult(pulled = pulled, skipped = skipped, errors = errors, failed = failed)
     }
 
     /**
      * 推送表情到电脑：push_file 逐文件（电脑端哈希去重）→ push_manifest 同步顺序/分组。
-     * 阻塞，勿在主线程调用。
+     * 阻塞，勿在主线程调用。`progress` 可选；每个 push_file 请求附带 `meta` 总量。
      */
-    fun push(context: Context, conn: LanConnection): LanResult {
+    fun push(context: Context, conn: LanConnection, progress: CloudSync.SyncProgress? = null): LanResult {
         val db = MemeDb.get(context)
         val remote = conn.pullManifest()
         val remoteNames = HashMap<String, Boolean>()
@@ -219,27 +238,40 @@ object LanClient {
                 if (fname.isNotEmpty()) remoteNames[fname] = true
             }
         }
-        var pushed = 0
         var skipped = 0
         var errors = 0
         val failed = mutableListOf<String>()
+        val pending = mutableListOf<Pair<Meme, StorFile>>()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
             if (m.filename in remoteNames) {
                 skipped++
                 continue
             }
-            val file = Thumbnailer.findMemeFile(context, m.filename) ?: run {
+            val file = Thumbnailer.findMemeFile(context, m.filename)
+            if (file == null) {
                 errors++
                 failed.add(m.filename)
                 continue
             }
+            pending.add(m to file)
+        }
+        val filesTotal = pending.size
+        val bytesTotal = pending.sumOf { it.second.length }
+        progress?.filesTotal = filesTotal
+        progress?.bytesTotal = bytesTotal
+        val meta = JSONObject().put("files_total", filesTotal).put("bytes_total", bytesTotal)
+        var pushed = 0
+        for ((m, file) in pending) {
             try {
-                conn.pushFile(m.filename, file.readBytes())
+                val data = file.readBytes()
+                conn.pushFile(m.filename, data, meta)
                 pushed++
+                progress?.report(data.size.toLong(), m.filename)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "push file failed ${m.filename}: $e")
                 errors++
                 failed.add(m.filename)
+                progress?.report(0L, m.filename)
             }
         }
         try {
@@ -258,7 +290,7 @@ object LanClient {
      * 覆盖本地配置，需谨慎调用。
      */
     fun pullConfig(context: Context, conn: LanConnection, includeSecrets: Boolean = false) {
-        val resp = conn.getConfig()
+        val resp = conn.getConfig(JSONObject().put("files_total", 1).put("bytes_total", 0))
         val cfg = resp.optJSONObject("config") ?: throw LanError("配置格式错误")
         val local = ConfigStore.get(context)
         val keys = cfg.keys()
@@ -287,7 +319,9 @@ object LanClient {
             if (!includeSecrets && ConfigStore.isSecretKey(k)) continue
             copy.put(k, cfg.opt(k))
         }
-        conn.sendConfig(copy)
+        val meta = JSONObject().put("files_total", 1)
+            .put("bytes_total", copy.toString().toByteArray(Charsets.UTF_8).size)
+        conn.sendConfig(copy, meta)
     }
 
     /** TCP 加密会话句柄 */
@@ -387,8 +421,10 @@ object LanClient {
             if (!resp.optBoolean("ok", false)) throw LanError(resp.optString("error", "推送清单失败"))
         }
 
-        fun pullFile(filename: String): ByteArray {
-            val resp = request("pull_file", JSONObject().put("filename", filename))
+        fun pullFile(filename: String, meta: JSONObject? = null): ByteArray {
+            val params = JSONObject().put("filename", filename)
+            if (meta != null) params.put("meta", meta)
+            val resp = request("pull_file", params)
             if (!resp.optBoolean("ok", false)) throw LanError(resp.optString("error", "拉取文件失败"))
             val b64 = resp.optString("data", "")
             return try {
@@ -398,20 +434,25 @@ object LanClient {
             }
         }
 
-        fun pushFile(filename: String, data: ByteArray) {
+        fun pushFile(filename: String, data: ByteArray, meta: JSONObject? = null) {
             val b64 = Base64.getEncoder().encodeToString(data)
-            val resp = request("push_file", JSONObject().put("filename", filename).put("data", b64))
+            val params = JSONObject().put("filename", filename).put("data", b64)
+            if (meta != null) params.put("meta", meta)
+            val resp = request("push_file", params)
             if (!resp.optBoolean("ok", false)) throw LanError(resp.optString("error", "推送文件失败"))
         }
 
-        fun getConfig(): JSONObject {
-            val resp = request("get_config")
+        fun getConfig(meta: JSONObject? = null): JSONObject {
+            val params = if (meta != null) JSONObject().put("meta", meta) else null
+            val resp = request("get_config", params)
             if (!resp.optBoolean("ok", false)) throw LanError(resp.optString("error", "获取配置失败"))
             return resp
         }
 
-        fun sendConfig(config: JSONObject) {
-            val resp = request("send_config", JSONObject().put("config", config))
+        fun sendConfig(config: JSONObject, meta: JSONObject? = null) {
+            val params = JSONObject().put("config", config)
+            if (meta != null) params.put("meta", meta)
+            val resp = request("send_config", params)
             if (!resp.optBoolean("ok", false)) throw LanError(resp.optString("error", "推送配置失败"))
         }
 
