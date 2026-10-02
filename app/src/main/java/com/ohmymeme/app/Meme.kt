@@ -13,5 +13,6 @@ data class Meme(
     val stegoOfHash: String?,
     val fromStego: Int,
     val createdAt: String,
-    val updatedAt: String
+    val updatedAt: String,
+    val cloud: Boolean = false
 )

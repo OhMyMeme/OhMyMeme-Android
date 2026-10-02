@@ -33,6 +33,8 @@ object ConfigStore {
         "sync_remove_local" to false,
         "sync_hide_upload_warning" to false,
         "sync_threads" to 3,
+        "cloud_direct" to true,
+        "cloud_thumb_auto_push" to true,
         "manifest_include_tags" to true,
         "manifest_include_favorites" to true,
         "show_upload_progress" to true,

@@ -38,6 +38,8 @@ object CloudSync {
     private const val TAG = "OhMyMeme"
     private const val INDEX_FILENAME = "meme-index.json"
     private const val REMOTE_MEME_DIR = "memes"
+    private const val REMOTE_THUMB_DIR = "thumbnails"
+    private const val CLOUD_INDEX_FILENAME = "cloud-index.json"
     private const val MANIFEST_VERSION = 3
 
     class SyncError(message: String) : Exception(message)
@@ -182,6 +184,408 @@ object CloudSync {
                 .put("file_size", m.fileSize)
         }
         return map
+    }
+
+    // ─── 云端直接使用（对齐桌面端 cloud_direct） ───
+
+    /** 云端清单中的一条缺失项（本地库没有的远端表情） */
+    data class CloudEntry(
+        val position: Int,
+        val filename: String,
+        val name: String,
+        val sha256: String,
+        val tags: List<String>,
+        val favorited: Boolean,
+        val collections: List<String>
+    )
+
+    /** 云表情点击下载结果（status 对齐桌面端 cloud_download） */
+    data class CloudDownloadResult(val status: String, val meme: Meme? = null)
+
+    @Volatile
+    private var cloudManifest: JSONObject? = null
+    private val cloudInflight: MutableSet<String> =
+        java.util.Collections.synchronizedSet(mutableSetOf())
+
+    internal fun isSafeSha(sha: String?): Boolean {
+        if (sha == null || sha.length != 64) return false
+        return sha.all { it in '0'..'9' || it in 'a'..'f' }
+    }
+
+    /** 清单 collections 树 → 文件名到全路径列表（对齐桌面端 _cloud_collection_paths） */
+    internal fun cloudCollectionPaths(arr: JSONArray?): Map<String, List<String>> {
+        val out = HashMap<String, MutableList<String>>()
+        fun walk(nodes: JSONArray, prefix: String) {
+            for (i in 0 until nodes.length()) {
+                val node = nodes.optJSONObject(i) ?: continue
+                val name = node.optString("name", "")
+                if (name.isEmpty()) continue
+                val path = if (prefix.isEmpty()) name else "$prefix/$name"
+                val fnames = node.optJSONArray("filenames")
+                if (fnames != null) {
+                    for (j in 0 until fnames.length()) {
+                        val f = fnames.optString(j, "")
+                        if (f.isNotEmpty()) out.getOrPut(f) { mutableListOf() }.add(path)
+                    }
+                }
+                val children = node.optJSONArray("children")
+                if (children != null && children.length() > 0) walk(children, path)
+            }
+        }
+        if (arr != null && arr.length() > 0) walk(arr, "")
+        return out.mapValues { it.value.toList() }
+    }
+
+    /** 清单 - 本地库 差集（对齐桌面端 cloud_missing：不安全名/缺 sha/已本地的条目跳过） */
+    internal fun cloudMissing(manifest: JSONObject?, localFilenames: Set<String>): List<CloudEntry> {
+        if (manifest == null) return emptyList()
+        val arr = manifest.optJSONArray("memes") ?: return emptyList()
+        val colsMap = cloudCollectionPaths(manifest.optJSONArray("collections"))
+        val favorites = mutableSetOf<String>()
+        val favArr = manifest.optJSONArray("favorite")
+        if (favArr != null) {
+            for (i in 0 until favArr.length()) {
+                val v = favArr.opt(i) as? String ?: continue
+                if (isSafeRemoteFname(v)) favorites.add(v)
+            }
+        }
+        val out = mutableListOf<CloudEntry>()
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            val fname = entry.optString("filename", "")
+            if (!isSafeRemoteFname(fname) || fname in localFilenames) continue
+            val sha = entry.optString("sha256", "")
+            if (!isSafeSha(sha)) continue
+            out.add(
+                CloudEntry(
+                    position = i,
+                    filename = fname,
+                    name = entry.optString("name", "").ifEmpty { fname.substringBeforeLast('.') },
+                    sha256 = sha,
+                    tags = jsonTagList(entry.optJSONArray("tags") ?: JSONArray()),
+                    favorited = fname in favorites,
+                    collections = colsMap[fname] ?: emptyList()
+                )
+            )
+        }
+        return out
+    }
+
+    /** 云条目 → 行模型（无本地 id：用负数位置 id 保证网格 tag/adapter 唯一） */
+    internal fun cloudMeme(entry: CloudEntry): Meme = Meme(
+        id = -(entry.position + 1L),
+        filename = entry.filename,
+        fileHash = entry.sha256,
+        originalName = entry.name,
+        width = 0,
+        height = 0,
+        fileSize = 0,
+        mimeType = "",
+        sortOrder = 0,
+        stegoOfHash = null,
+        fromStego = 0,
+        createdAt = "",
+        updatedAt = "",
+        cloud = true
+    )
+
+    /** 本地与云行按清单序穿插；不在清单的本地行保持原查询序排最前（对齐桌面端 _merge_manifest_order） */
+    internal fun mergeCloudOrder(
+        local: List<Meme>,
+        cloud: List<Meme>,
+        order: List<String>
+    ): List<Meme> {
+        val pos = HashMap<String, Int>()
+        order.forEachIndexed { i, f -> if (f !in pos) pos[f] = i }
+        val extras = local.filter { it.filename !in pos }
+        val paired = mutableListOf<Pair<Int, Meme>>()
+        local.forEach { m -> pos[m.filename]?.let { paired.add(it to m) } }
+        cloud.forEach { m -> pos[m.filename]?.let { paired.add(it to m) } }
+        paired.sortBy { it.first }
+        val rest = cloud.filter { it.filename !in pos }
+        return extras + paired.map { it.second } + rest
+    }
+
+    internal fun manifestOrder(manifest: JSONObject?): List<String> {
+        val arr = manifest?.optJSONArray("memes") ?: return emptyList()
+        val out = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            val f = m.optString("filename", "")
+            if (f.isNotEmpty()) out.add(f)
+        }
+        return out
+    }
+
+    private fun cloudIndexFile(ctx: Context): File = File(StoragePaths.dataDir(ctx), CLOUD_INDEX_FILENAME)
+
+    /** 读云端清单：内存缓存 → dataDir/cloud-index.json 缓存，缺失/损坏返回 null */
+    fun loadCloudManifest(ctx: Context): JSONObject? {
+        cloudManifest?.let { return it }
+        synchronized(this) {
+            cloudManifest?.let { return it }
+            val parsed = try {
+                val f = cloudIndexFile(ctx)
+                if (f.exists()) JSONObject(f.readText()) else null
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "load cloud manifest failed: $e")
+                null
+            }
+            cloudManifest = parsed
+            return parsed
+        }
+    }
+
+    /** 拉取远端清单并写本地缓存；失败保留旧缓存 */
+    fun refreshCloudManifest(ctx: Context): JSONObject? {
+        val cfg = ConfigStore.get(ctx)
+        if (cfg.optString("sync_type", "").isEmpty()) return loadCloudManifest(ctx)
+        val bk = createBackend(cfg)
+        try {
+            bk.connect()
+            val data = downloadIndex(ctx, bk, cfg) ?: return loadCloudManifest(ctx)
+            try {
+                cloudIndexFile(ctx).writeText(data.toString())
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "save cloud manifest failed: $e")
+            }
+            synchronized(this) { cloudManifest = data }
+            return data
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "refresh cloud manifest failed: $e")
+            return loadCloudManifest(ctx)
+        } finally {
+            bk.close()
+        }
+    }
+
+    /** 清空云端清单缓存（sync_type/cloud_direct 变更时调用，对齐桌面端 _cloud_reset） */
+    fun clearCloudCache(ctx: Context) {
+        synchronized(this) { cloudManifest = null }
+        try {
+            cloudIndexFile(ctx).delete()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "delete cloud manifest cache failed: $e")
+        }
+    }
+
+    /** 当前应展示的云行（cloud_direct 关时为空） */
+    fun cloudRows(ctx: Context): List<Meme> {
+        if (!ConfigStore.get(ctx).optBoolean("cloud_direct", true)) return emptyList()
+        val manifest = loadCloudManifest(ctx) ?: return emptyList()
+        val local = MemeDb.get(ctx).getAll(0, Int.MAX_VALUE).map { it.filename }.toSet()
+        return cloudMissing(manifest, local).map { cloudMeme(it) }
+    }
+
+    fun manifestOrderCached(ctx: Context): List<String> = manifestOrder(loadCloudManifest(ctx))
+
+    /** 按文件名取当前清单中的云条目（已本地/不在清单返回 null） */
+    fun cloudEntry(ctx: Context, filename: String): CloudEntry? {
+        val manifest = loadCloudManifest(ctx) ?: return null
+        val local = MemeDb.get(ctx).getAll(0, Int.MAX_VALUE).map { it.filename }.toSet()
+        return cloudMissing(manifest, local).firstOrNull { it.filename == filename }
+    }
+
+    /** 云表情点击下载：下载→sha 校验→导入（按清单文件名）→标签/分组/收藏后补 */
+    fun downloadCloudMeme(ctx: Context, filename: String): CloudDownloadResult {
+        val cfg = ConfigStore.get(ctx)
+        if (!cfg.optBoolean("cloud_direct", true)) return CloudDownloadResult("disabled")
+        if (cfg.optString("sync_type", "").isEmpty()) return CloudDownloadResult("no_sync")
+        val entry = cloudEntry(ctx, filename) ?: return CloudDownloadResult("not_found")
+        if (!cloudInflight.add(filename)) return CloudDownloadResult("busy")
+        val tmp = File(ctx.cacheDir, "cloud-${System.nanoTime()}.tmp")
+        try {
+            val root = remoteRoot(cfg)
+            val bk = createBackend(cfg)
+            try {
+                bk.connect()
+                if (!bk.downloadFile(remoteMemePath(root, filename), tmp)) {
+                    return CloudDownloadResult("download_failed")
+                }
+            } finally {
+                bk.close()
+            }
+            if (tmp.length() == 0L) return CloudDownloadResult("download_failed")
+            val sha = FileUtils.sha256(tmp)
+            if (!sha.equals(entry.sha256, ignoreCase = true)) {
+                return CloudDownloadResult("sha_mismatch")
+            }
+            if (tmp.length() > MemeImporter.MAX_BYTES) return CloudDownloadResult("too_large")
+            val bytes = tmp.readBytes()
+            if (!MemeImporter.isValidImageContent(bytes)) {
+                return CloudDownloadResult("invalid_image")
+            }
+            val opts = BitmapFactory.Options()
+            opts.inJustDecodeBounds = true
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) {
+                return CloudDownloadResult("invalid_image")
+            }
+            if (maxOf(opts.outWidth, opts.outHeight) > MemeImporter.MAX_PX) {
+                return CloudDownloadResult("too_large")
+            }
+            val db = MemeDb.get(ctx)
+            val existing = db.getByHash(entry.sha256)
+            val meme: Meme
+            if (existing != null) {
+                meme = existing
+            } else {
+                val mime = "image/${filename.substringAfterLast('.', "png").lowercase()}"
+                val dst = StoragePaths.cacheDir(ctx).createFile(filename, mime)
+                dst.writeBytes(bytes)
+                val id = db.addMeme(
+                    filename = filename,
+                    fileHash = entry.sha256,
+                    width = opts.outWidth,
+                    height = opts.outHeight,
+                    fileSize = dst.length,
+                    mimeType = mime,
+                    originalName = entry.name
+                )
+                if (id == -1L) return CloudDownloadResult("error")
+                meme = db.getByFilename(filename) ?: return CloudDownloadResult("error")
+            }
+            cloudBackfill(ctx, db, meme.id, entry)
+            android.util.Log.d(TAG, "cloud download ok $filename -> id=${meme.id}")
+            return CloudDownloadResult("ok", meme)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "cloud download failed $filename: $e")
+            return CloudDownloadResult("download_failed")
+        } finally {
+            tmp.delete()
+            cloudInflight.remove(filename)
+        }
+    }
+
+    /** 导入后异步补齐云端元数据：标签/逐段分组链/收藏（对齐桌面端 _cloud_backfill） */
+    private fun cloudBackfill(ctx: Context, db: MemeDb, memeId: Long, entry: CloudEntry) {
+        try {
+            if (entry.tags.isNotEmpty()) db.mergeMemeTags(memeId, entry.tags)
+            for (path in entry.collections) {
+                var cid: Long = -1
+                for (seg in path.split("/")) {
+                    if (seg.isEmpty()) continue
+                    cid = db.createCollection(seg, if (cid > 0) cid else null)
+                    if (cid < 0) break
+                }
+                if (cid > 0) db.addToCollection(memeId, cid)
+            }
+            if (entry.favorited) db.addFavorite(memeId)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "cloud backfill failed: $e")
+        }
+    }
+
+    /** 预取云端缩略图到 thumbnails/{sha}.webp（失败项重试一遍），返回就绪数 */
+    fun prefetchCloudThumbs(ctx: Context): Int {
+        val cfg = ConfigStore.get(ctx)
+        if (!cfg.optBoolean("cloud_direct", true)) return 0
+        if (cfg.optString("sync_type", "").isEmpty()) return 0
+        val manifest = loadCloudManifest(ctx) ?: return 0
+        val local = MemeDb.get(ctx).getAll(0, Int.MAX_VALUE).map { it.filename }.toSet()
+        val missing = cloudMissing(manifest, local)
+        if (missing.isEmpty()) return 0
+        val root = remoteRoot(cfg)
+        val thumbDir = StoragePaths.thumbnailDir(ctx)
+        var ready = 0
+        val bk = createBackend(cfg)
+        try {
+            bk.connect()
+            val remoteDir = root.trimEnd('/') + "/" + REMOTE_THUMB_DIR
+            var pending = mutableListOf<String>()
+            for (e in missing) {
+                if (thumbDir.child("${e.sha256}.webp").exists) ready++ else pending.add(e.sha256)
+            }
+            pending = pending.distinct().toMutableList()
+            for (attempt in 0 until 2) {
+                if (pending.isEmpty()) break
+                val retry = mutableListOf<String>()
+                for (sha in pending) {
+                    val tmp = File(ctx.cacheDir, "thumb-${System.nanoTime()}.tmp")
+                    try {
+                        val ok = bk.downloadFile("$remoteDir/$sha.webp", tmp)
+                        if (ok && tmp.length() > 0L) {
+                            val dst = thumbDir.child("$sha.webp")
+                            if (dst.exists) dst.delete()
+                            thumbDir.createFile("$sha.webp", "image/webp").writeFrom(tmp)
+                            ready++
+                        } else {
+                            retry.add(sha)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "prefetch thumb ${sha.take(12)} failed: $e")
+                        retry.add(sha)
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+                pending = retry
+            }
+            android.util.Log.d(TAG, "cloud thumb prefetch ready=$ready")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "cloud thumb prefetch failed: $e")
+        } finally {
+            bk.close()
+        }
+        return ready
+    }
+
+    /**
+     * 启动静默补传：为本地表情生成 150px WebP 缩略图，按远端 thumbnails 差集上传。
+     * 门控：cloud_direct 开 + cloud_thumb_auto_push 开 + sync_type 已配置；失败仅告警返回 0。
+     */
+    fun autoPushThumbs(ctx: Context): Int {
+        val cfg = ConfigStore.get(ctx)
+        if (!cfg.optBoolean("cloud_direct", true)) return 0
+        if (!cfg.optBoolean("cloud_thumb_auto_push", true)) return 0
+        if (cfg.optString("sync_type", "").isEmpty()) return 0
+        val memes = MemeDb.get(ctx).getAll(0, Int.MAX_VALUE)
+        if (memes.isEmpty()) return 0
+        val root = remoteRoot(cfg)
+        val remoteDir = root.trimEnd('/') + "/" + REMOTE_THUMB_DIR
+        val bk = createBackend(cfg)
+        var uploaded = 0
+        try {
+            bk.connect()
+            try {
+                bk.ensureRemoteDir(remoteDir)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "ensure thumbs dir failed: $e")
+            }
+            val remoteNames: Set<String> = try {
+                bk.listFiles(remoteDir).toSet()
+            } catch (e: Exception) {
+                emptySet()
+            }
+            for (m in memes) {
+                val sha = m.fileHash
+                if (!isSafeSha(sha)) continue
+                try {
+                    if (remoteNames.isNotEmpty()) {
+                        if ("$sha.webp" in remoteNames) continue
+                    } else if (bk.fileExists("$remoteDir/$sha.webp")) {
+                        continue
+                    }
+                    val bytes = Thumbnailer.cloudThumbWebpBytes(ctx, m.filename) ?: continue
+                    val tmp = File(ctx.cacheDir, "tpush-${System.nanoTime()}.tmp")
+                    try {
+                        tmp.writeBytes(bytes)
+                        if (bk.uploadFile(tmp, "$remoteDir/$sha.webp")) uploaded++
+                    } finally {
+                        tmp.delete()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "push thumb ${sha.take(12)} failed: $e")
+                }
+            }
+            if (uploaded > 0) android.util.Log.d(TAG, "cloud thumb auto-push: uploaded $uploaded")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "auto push thumbs failed: $e")
+            uploaded = 0
+        } finally {
+            bk.close()
+        }
+        return uploaded
     }
 
     // ─── 后端抽象 ───

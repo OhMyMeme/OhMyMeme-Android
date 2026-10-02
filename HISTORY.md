@@ -2,6 +2,14 @@
 
 ## 新增
 
+- **云端下载遮罩与退场动画** — 点击云卡片先显示整卡黑色半透明「下载中…」遮罩（`cloud_mask`，防重复点击），下载成功后遮罩用 `ValueAnimator` 驱动 `clipBounds` **自上而下擦除退场**（0.40s），动画结束才刷新网格并自动分享；失败即时摘遮罩并 Toast；下载状态存 `MemeGridAdapter` 伴生对象 `downloadingIds`，`reloadData` 重建 adapter 不丢遮罩
+- **云角标改为云朵图标** — 云行左下角「云」文字角标替换为与桌面端一致的云朵描边图标（新增 `ic_cloud` 白色描边 + `bg_cloud_badge` 半透明黑圆底，18dp 圆形徽标）
+- **标签对话框美化** — 无匹配标签时显示空态提示「暂无匹配标签，输入后回车添加」（`tv_tag_empty`，`bind()` 按过滤结果切换）；输入框加高、整体边距对齐标题 24dp
+
+- **云端直接使用（对齐桌面端 cloud_direct）** — `ConfigStore.DEFAULTS` 新增 `cloud_direct`/`cloud_thumb_auto_push`（均默认开）；`Meme.kt` 新增 `cloud` 字段（云行 id = `-(清单位置+1)` 负数保证 adapter tag 唯一）；`CloudSync` 新增云模块：`cloud-index.json` 清单缓存（内存 + dataDir 双层，`loadCloudManifest`/`refreshCloudManifest` 失败保留旧缓存，`clearCloudCache` 在 `sync_type`/`cloud_direct` 变更时清理）、`cloudMissing` 差集（`isSafeRemoteFname` + 64 位小写 `isSafeSha` 校验、跳过已本地，携带 tags/分组全路径/收藏）、`mergeCloudOrder` 合并（不在清单的本地行按原序排最前，其余按清单序穿插、云行补尾）、`prefetchCloudThumbs` 预取 `thumbnails/{sha}.webp`（失败整体重试一遍）、`autoPushThumbs` 补传（三重门控 cloud_direct + 开关 + sync_type，远端 listFiles 差集，缺失项用 `Thumbnailer.cloudThumbWebpBytes` 生成 150px WebP q85 上传，list 为空回退单查）、`downloadCloudMeme`（状态对齐桌面端 `download_meme`，流式 SHA-256 比对 → 20MiB/2560px 上限 → 按清单文件名去重入库 → `cloudBackfill` 后补标签并集/分组链逐段复用/收藏 INSERT OR IGNORE，busy 防重入）；主界面默认视图合并云行（左下角「云」角标，隐藏「⋯」/勾选/handle），点击云卡片下载成功后刷新网格并自动走分享链路；整理模式全选与拖拽排序持久化过滤 `id > 0`；设置页「云端同步」新增 `sw_cloud_direct`/`sw_cloud_thumb_push` 两开关，`saveConfig` 首配 `sync_type` 时弹「开启云端直接使用？」确认（开启=勾选、关闭=取消勾选、取消/Esc 保持当前勾选，均经 `doSaveConfig` 落盘，对齐桌面端 `showConfirm`）
+- 新增 `CloudDirectTest`（8 例：合并顺序 extras-first / 清单穿插 / 云尾、差集跳过本地与不安全名 / 缺 sha、名字回退 / 收藏 / 分组全路径、负数 id、清单序、`isSafeSha` 校验、`DEFAULTS` 默认键）
+- `Thumbnailer` 新增 `cloudThumbFile`/`cloudThumbBitmap`/`cloudThumbWebpBytes`/`decodeFit` 云缩略图读写辅助
+
 - **侧栏滑动手势** — 屏幕左缘（≤16dp）右滑 ≥64dp 展开侧栏，侧栏内左滑 ≥64dp 收起（均要求水平主导），对齐桌面端侧栏条滑动手势；`MainActivity.dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP，避免滑动收起时误触分组行点击
 
 - **同步与局域网传输进度弹窗** — 进度对话框抽为共享组件 `SyncProgressUi.kt`（`SyncProgressDialog`：字节制百分比封顶 99、未知总量回退文件数、实时速度、当前文件、「后台运行」；`dialog_sync_progress` meta 行拆为百分比 + 速度并排，对齐桌面端样式）；设置页云端上传/下载从按钮占位改为走进度对话框（受 `show_upload_progress`/`show_download_progress` 门控，`runCloudSync`）；局域网拉取/上传/配置/密钥同步（`lanOp`/`configOp`/`runKeyOp`）均弹进度对话框（总是显示，不接开关）
@@ -15,6 +23,8 @@
 
 ## 修复
 
+- **弹窗四角露白** — `AlertDialog.OhMyMeme` 原用 `android:background` 提供 `bg_dialog` 圆角背景，该属性不作用于窗口，PhoneWindow 回退系统白色 inset 背景导致弹窗四角露白；改用 `android:windowBackground`，并补 `android:textColorHint`（`muted`）与 `android:windowTitleStyle`（17sp 加粗、单行省略）
+- **弹窗按钮文字色不生效** — 框架 `android.app.AlertDialog` 的 AlertController 只认 `android:buttonBar*Style`，原主题只设无前缀 appcompat 版本导致「确定/取消」显示默认白色；两种前缀均补齐（确定 accent 蓝、取消 muted），title/colorPrimary 同步对齐
 - **设置页上传/下载按钮状态** — 原 `runSync` 完成后永远把 `btn_sync_push` 恢复为默认文本（即使本次跑的是下载），改为按 `btnId` 恢复对应按钮文本
 
 # v0.5.5 — 桌面功能迁移 + 首次设置向导 + 视觉对齐

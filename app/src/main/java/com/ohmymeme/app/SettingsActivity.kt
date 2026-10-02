@@ -167,6 +167,10 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked =
             cfg.optBoolean("copy_avoid_webp", false)
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
+        findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked =
+            cfg.optBoolean("cloud_direct", true)
+        findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked =
+            cfg.optBoolean("cloud_thumb_auto_push", true)
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
             cfg.optBoolean("sync_auto_fetch_index", false)
         findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked =
@@ -898,6 +902,33 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun saveConfig() {
+        val oldType = ConfigStore.get(this).optString("sync_type", "")
+        val newType = syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition]
+        if (oldType.isEmpty() && newType.isNotEmpty()) {
+            // 首次配置云端：询问是否开启「云端直接使用」（对齐桌面端 showConfirm 开启/关闭）
+            android.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.cloud_confirm_title))
+                .setMessage(getString(R.string.cloud_confirm_message))
+                .setPositiveButton(getString(R.string.cloud_enable)) { _, _ ->
+                    findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked = true
+                    doSaveConfig()
+                }
+                .setNegativeButton(getString(R.string.cloud_disable)) { _, _ ->
+                    findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked = false
+                    doSaveConfig()
+                }
+                .setOnCancelListener { doSaveConfig() }
+                .show()
+            return
+        }
+        doSaveConfig()
+    }
+
+    private fun doSaveConfig() {
+        val oldType = ConfigStore.get(this).optString("sync_type", "")
+        val oldCloudDirect = ConfigStore.get(this).optBoolean("cloud_direct", true)
+        val newType = syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition]
+        val newCloudDirect = findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked
         ConfigStore.set(this, "auto_play_gif", findViewById<SwitchMaterial>(R.id.sw_gif).isChecked)
         ConfigStore.set(this, "show_uncategorized", findViewById<SwitchMaterial>(R.id.sw_uncategorized).isChecked)
         ConfigStore.set(this, "record_recent_use", findViewById<SwitchMaterial>(R.id.sw_record_recent).isChecked)
@@ -907,7 +938,9 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
         ConfigStore.set(this, "manifest_include_tags", findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked)
         ConfigStore.set(this, "manifest_include_favorites", findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked)
-        ConfigStore.set(this, "sync_type", syncTypes[findViewById<Spinner>(R.id.sp_sync_type).selectedItemPosition])
+        ConfigStore.set(this, "cloud_direct", findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked)
+        ConfigStore.set(this, "cloud_thumb_auto_push", findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked)
+        ConfigStore.set(this, "sync_type", newType)
         ConfigStore.set(this, "sync_delete_remote", findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked)
         ConfigStore.set(this, "sync_remove_local", findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked)
         ConfigStore.set(this, "sync_hide_upload_warning", findViewById<SwitchMaterial>(R.id.sw_hide_upload_warn).isChecked)
@@ -945,6 +978,9 @@ class SettingsActivity : AppCompatActivity() {
 
         ConfigStore.save(this)
         ConfigStore.reload(this)
+        if (oldType != newType || oldCloudDirect != newCloudDirect) {
+            CloudSync.clearCloudCache(this)
+        }
         android.util.Log.d(TAG, "saveConfig done")
         toast(getString(R.string.config_saved))
     }
