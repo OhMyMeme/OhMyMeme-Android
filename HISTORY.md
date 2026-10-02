@@ -1,4 +1,4 @@
-# 未发布
+# v0.5.6 — 云端直接使用 + 下载遮罩动画 + 传输进度弹窗
 
 ## 新增
 
@@ -26,6 +26,10 @@
 - **弹窗四角露白** — `AlertDialog.OhMyMeme` 原用 `android:background` 提供 `bg_dialog` 圆角背景，该属性不作用于窗口，PhoneWindow 回退系统白色 inset 背景导致弹窗四角露白；改用 `android:windowBackground`，并补 `android:textColorHint`（`muted`）与 `android:windowTitleStyle`（17sp 加粗、单行省略）
 - **弹窗按钮文字色不生效** — 框架 `android.app.AlertDialog` 的 AlertController 只认 `android:buttonBar*Style`，原主题只设无前缀 appcompat 版本导致「确定/取消」显示默认白色；两种前缀均补齐（确定 accent 蓝、取消 muted），title/colorPrimary 同步对齐
 - **设置页上传/下载按钮状态** — 原 `runSync` 完成后永远把 `btn_sync_push` 恢复为默认文本（即使本次跑的是下载），改为按 `btnId` 恢复对应按钮文本
+
+## 其他
+
+- **版本号** — versionCode 13 / versionName 0.5.6
 
 # v0.5.5 — 桌面功能迁移 + 首次设置向导 + 视觉对齐
 
