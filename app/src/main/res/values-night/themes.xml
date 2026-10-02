@@ -9,9 +9,13 @@
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:textColor">@color/fg</item>
+        <item name="android:textColorPrimary">@color/fg</item>
+        <item name="android:textColorSecondary">@color/fg_secondary</item>
         <item name="android:textColorHint">@color/muted</item>
+        <item name="android:colorAccent">@color/accent</item>
         <item name="android:alertDialogTheme">@style/AlertDialog.OhMyMeme</item>
         <item name="popupMenuStyle">@style/PopupMenu.OhMyMeme</item>
+        <item name="android:popupMenuStyle">@style/PopupMenu.OhMyMeme</item>
     </style>
 
     <style name="AlertDialog.OhMyMeme" parent="Theme.MaterialComponents.Dialog.Alert">
@@ -19,11 +23,14 @@
         <item name="android:textColor">@color/fg</item>
         <item name="android:textColorPrimary">@color/fg</item>
         <item name="android:textColorHint">@color/muted</item>
+        <item name="android:colorAccent">@color/accent</item>
         <item name="android:windowTitleStyle">@style/DialogWindowTitle.OhMyMeme</item>
         <item name="android:buttonBarPositiveButtonStyle">@style/PositiveButton.OhMyMeme</item>
         <item name="android:buttonBarNegativeButtonStyle">@style/NegativeButton.OhMyMeme</item>
+        <item name="android:buttonBarNeutralButtonStyle">@style/NeutralButton.OhMyMeme</item>
         <item name="buttonBarPositiveButtonStyle">@style/PositiveButton.OhMyMeme</item>
         <item name="buttonBarNegativeButtonStyle">@style/NegativeButton.OhMyMeme</item>
+        <item name="buttonBarNeutralButtonStyle">@style/NeutralButton.OhMyMeme</item>
     </style>
 
     <style name="DialogWindowTitle.OhMyMeme" parent="android:TextAppearance.Material.DialogWindowTitle">
@@ -45,5 +52,9 @@
 
     <style name="NegativeButton.OhMyMeme" parent="Widget.MaterialComponents.Button.TextButton">
         <item name="android:textColor">@color/muted</item>
+    </style>
+
+    <style name="NeutralButton.OhMyMeme" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/accent</item>
     </style>
 </resources>

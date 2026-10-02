@@ -42,11 +42,13 @@ app/src/main/
     MemeDb.kt           # SQLite 封装（7 表 + 索引 + 列迁移）
     ConfigStore.kt      # JSON 配置（DEFAULTS 与桌面端 config.py 一致）
     CryptoUtil.kt       # Android Keystore AES-GCM 加解密
-    StoragePaths.kt     # 路径解析（base/data/cache/thumbnails/db/config + SAF 树持久化）
+    StoragePaths.kt     # 路径解析（base/data/cache/thumbnails/db/config + SAF 树持久化 + .nomedia 标记 ensureNomedia）
     StorFile.kt         # 统一文件句柄：SAF content URI / 真实路径 双模式读写 cache/thumbnails
     FileUtils.kt        # SHA-256 + 魔数识别扩展名
     CacheScanner.kt     # 缓存扫描（双重去重）
     MemeImporter.kt     # SAF 批量导入（含 20MiB/2560px 上限，ImportOutcome/ImportResult）
+    ShizukuBridge.kt    # Shizuku 权限三态 + 远程 shell 执行（newProcess 经反射，stderr 后台排空）
+    QqCacheImporter.kt  # 手机QQ缓存扫描（收藏/聊天图片/表情候选根）+ 多选导入/SAF 转存
     SidebarTreeAdapter.kt # 分组树侧栏适配器（CollectionEntry/CollectionNode/SidebarRow 平铺树）
     GifFrameDecoder.kt  # 自研最小 GIF 解码器（LZW/interlace/色板，与 Pillow 一致）
     GifEncoder.kt       # 自研最小 GIF 编码器（median cut 256 色 + LZW，与 GifFrameDecoder 严格对应）
@@ -62,7 +64,7 @@ app/src/main/
     SetupGuideActivity.kt # 首次设置向导（5 步：欢迎/存储/复制/云同步/完成）
     QuickTileService.kt # 控制中心快捷磁贴（TileService，点击打开主界面）
   res/
-    layout/activity_main.xml / activity_settings.xml / activity_setup_guide.xml / item_* / dialog_tag_editor.xml / dialog_add_collection.xml
+    layout/activity_main.xml / activity_settings.xml / activity_setup_guide.xml / item_* / dialog_tag_editor.xml / dialog_add_collection.xml / dialog_qq_import.xml
     values/colors.xml   # 暗色配色（slate 体系：bg #0D0D0F、card/surface #1A1A1F、fg #E2E8F0、fg_secondary #94A3B8、muted #8A94A8、border #2A2A32、accent #3B82F6、primary_strong #1D4ED8）
     values/themes.xml   # Theme.OhMyMeme（含 values-night）
     values/strings.xml  # 含 copy_mode_options / sync_type_options / s3_addressing_options / s3_signature_options
@@ -105,7 +107,7 @@ Android/data/com.ohmymeme.app/
 - 设置页修改位置：`onStorageDirPicked` 同样先 `persistDataTree`，弹窗询问是否转移，`moveDataToTree` 用 `StorFile` 只拷贝 `cache`/`thumbnails` 两个子目录（绝不拷贝 memes.db），成功后删除源子树并 `applyStorageTree`
 
 ### 导入（MemeImporter.kt）
-- 点击标题栏「导入」弹 `menu_import.xml` 菜单：从文件导入（`pickImages`，SAF `ACTION_OPEN_DOCUMENT` 多选）/ 从手机相册导入（`pickAlbumImages`：`isPhotoPickerAvailable` 为真走 Photo Picker `PickMultipleVisualMedia`，否则回退 `ACTION_GET_CONTENT` 相册，避免库默认回退文件选择器）/ 从手机QQ缓存导入（占位 Toast「开发中，后续用 Shizuku 获取文件」）
+- 点击标题栏「导入」弹 `menu_import.xml` 菜单：从文件导入（`pickImages`，SAF `ACTION_OPEN_DOCUMENT` 多选）/ 从手机相册导入（`pickAlbumImages`：`isPhotoPickerAvailable` 为真走 Photo Picker `PickMultipleVisualMedia`，否则回退 `ACTION_GET_CONTENT` 相册，避免库默认回退文件选择器）/ 从手机QQ缓存导入（Shizuku 授权后扫描 → 目录/文件双栏可视化勾选 → 导入或转存，见下方「从手机QQ缓存导入」小节）
 - 两种导入共用 `doImport(uris)` → `MemeImporter.importUris`：逐文件：查哈希去重 → 魔数识别扩展名 → 拷贝到 `cache/{hash16}{ext}` → 读尺寸 → `addMeme`
 - **导入上限**（对齐桌面端 `config.py` `_IMPORT_MAX_BYTES`/`_IMPORT_MAX_PX`）：单文件 >20MiB（`MAX_BYTES`）或任一边 >2560px（`MAX_PX`）拒绝导入并计入 rejected（`ImportOutcome` 枚举：`OVER_LIMIT`/`INVALID`/`FAILED`/`DUPLICATE`/`OK`，`ImportResult` 汇总 imported/rejected/skipped/errors）；局域网拉取与云端 pull 复用 `MAX_BYTES` 校验
 - 单文件失败不影响其余文件（catch 后继续），结束 Toast 汇总成功/跳过/超限/失败数（`import_rejected`/`import_errors`）
@@ -113,10 +115,19 @@ Android/data/com.ohmymeme.app/
 - `GifFrameDecoder` 为自研最小 GIF 解码器（GIF87a/89a、全局/局部色板、LZW、interlace、透明索引直映射 RGB、Pillow 一致的 `(R*299+G*587+B*114+500)/1000` 灰度），与 Pillow 逐字节一致；LZMA 用 `org.tukaani:xz`（`XZInputStream`）；PNG 输出用自研 RGBA 编码器
 - `CacheScanner` 不做 STG3 检测（对齐桌面端 `scan_cache`）
 
+### 从手机QQ缓存导入（ShizukuBridge.kt + QqCacheImporter.kt）
+- **前提**：需安装并启动 Shizuku（ADB/root 授权）；manifest 声明 `rikka.shizuku.ShizukuProvider`（`${applicationId}.shizuku`，INTERACT_ACROSS_USERS_FULL 保护）与 `<queries>`（`moe.shizuku.privileged.api`），依赖 `dev.rikka.shizuku:api/provider` 13.1.5（`libs.versions.toml`）
+- **权限三态**（`ShizukuBridge`）：`available()`（`pingBinder`）→ `hasPermission()`（`checkSelfPermission`）→ `requestPermission`，结果经 `MainActivity.qqPermissionListener`（`Shizuku.addRequestPermissionResultListener`，onCreate 注册 / onDestroy 移除）回调 `beginQqScan()`；未安装/未授权分别 Toast 引导
+- **远程执行**：`Shizuku.newProcess` 在 13.1.5 为 private（规划 API 14 移除）→ 反射调用；`exec` 走 `sh -c` 返回退出码 + stdout 文本，`readFile` 直接 `cat` 取字节，stderr 由 daemon 线程排空防管道写满死锁
+- **扫描**（对应桌面端 `adb_util` 路径发现，改为手机获取自身缓存）：候选根 = `/storage/emulated/0`、`/sdcard`、`/storage/*` 外置卷 × 后缀（`QQ_Favorite` 桌面同款 / `chatpic` 含 chatraw·chatimg·chatthumb / `files/tencent/MicroMsg/.emotionsm`）；单条命令 `for d in …; [ -d "$d" ] && readlink -f | sort -u` 归一去重（`/sdcard` 与主存储同源不重复），逐根 `find -type f` + `stat -c %s` 输出「size<TAB>path」行解析（跳过 stat 失败、相对路径、`.nomedia` 与 `SKIP_EXT` 非图片扩展名；无扩展名/未知扩展名保留交魔数判定）；候选与根经 `shellQuote` 单引号包裹防注入，结果按根 + 路径排序去重
+- **可视化选择界面**（`dialog_qq_import.xml`，仿桌面端添加分组双栏弹窗）：顶部搜索框（命中文件名时右栏跨目录过滤，标签用 `displayLabel` 带相对路径）；左栏目录列表（`dirLabel` 根相对路径 + 总数/已选数，`simple_list_item_activated_1` 单选高亮），右栏文件多选列表（`fileNameLabel` 文件名 + 体积，`simple_list_item_multiple_choice`，跨目录勾选状态按 path 集合持久）；右栏头「全选/清空」一键切换全部文件 + 「（已选 n）」计数；「导入」→ `importSelected`（逐文件 >20MiB 跳过计入 rejected → `MemeImporter.importBytes` 去重/上限/魔数/隐写全链路）；「转存到…」→ 系统 `ACTION_OPEN_DOCUMENT_TREE` 每次让用户指定目录（不持久化授权）→ `exportSelected`（单文件 ≤64MiB 整读 → `exportName` 魔数补正扩展名（QQ 存 .jpg 实为 png/webp，无扩展名补全）→ `contentResolver.openOutputStream` 写入）
+- **进度**：两路均复用共享 `SyncProgressDialog`（`report` 累计字节，`syncExecutor` 后台执行），完成 Toast 汇总（导入复用 `import_done`/`import_rejected`/`import_errors`，转存 `qq_export_done`）；单测 `QqCacheImporterTest`（18 例）
+
 ### 缓存扫描（CacheScanner.kt）
 - 遍历 cache 目录：跳过非图片扩展名、`thumbnails` 路径、与同名 `.webp` 共存的 `.gif`
 - **双重去重**：`getByFilename` 跳过已注册 → SHA-256 → `getByHash` 跳过重复内容
 - 与桌面端 `scan_cache` 逻辑一致
+- **`.nomedia` 标记**（`StoragePaths.ensureNomedia`）：启动（MainActivity executor）、设置页修改存储位置（`applyStorageTree`）、恢复备份、向导选目录后，在 `configRoot`/`dataDir` 真实目录与 SAF 树根写入空 `.nomedia` 阻止媒体库扫描；云端 push/pull/清单、LAN push、缩略图补传全部以数据库条目驱动，`.nomedia` 不在库中故**不会上传云端**；pull 的 `remove_local`/`deleteAllLocal` 按库文件名删除，不触碰 `.nomedia`
 
 ### 缩略图（Thumbnailer.kt）
 - 命名 `{meme_id}_{size}.png`，存在即复用（与桌面端一致）
@@ -307,6 +318,5 @@ Android/data/com.ohmymeme.app/
 - 控制中心快捷按钮：`QuickTileService`（`TileService`，manifest 声明 `BIND_QUICK_SETTINGS_TILE` + `quick_settings_tile.xml` 磁贴图标 `ic_qs_tile`），`onClick` 打开 MainActivity（锁屏先 `unlockAndRun`）；设置页「快捷开关」区块 + 「添加到控制中心」按钮弹添加指引（系统磁贴需用户在快捷设置编辑面板手动添加）
 - 长按拖拽发送（相册式）：`MemeGridAdapter` 长按卡片直接回调 `onDragStart` → `MainActivity.startGlobalDrag`：`materializeDragFile`（SAF 先 `stor.copyTo(cacheDir)` 物化，统一临时文件路径）→ `FileProvider.getUriForFile` → `ClipData.newUri` → `itemView.startDragAndDrop(DRAG_FLAG_GLOBAL or DRAG_FLAG_GLOBAL_URI_READ)` 跨应用拖入微信/QQ，同时 `recordUse`；`ACTION_DRAG_ENDED` 且未被接收（`!e.result`）时回调 `onDragFailed` 弹原右键菜单兜底；卡片右上角 `btn_meme_menu`（「⋯」）点击回调 `onMenuClick` 打开 `showMemeMenu`；注意鸿蒙/Huawei 上 `TYPE_APPLICATION_OVERLAY` 无法发起全局拖拽，因此拖拽必须由 Activity 窗口内的视图发起（曾用悬浮窗方案失败后改为相册式）；跨应用拖拽需真机验证（接收方是否支持图片拖放，失败有菜单兜底）
 - 云端直接使用（`cloud_direct`，默认开）：`ConfigStore` 新增 `cloud_direct`/`cloud_thumb_auto_push`，`Meme.kt` 新增 `cloud` 字段；`MainActivity.startCloudDirect` 启动先用清单缓存合并渲染云行（`reloadData` 默认视图走 `mergeCloudOrder`），后台刷新 `cloud-index.json` 清单重载，`syncExecutor` 依次预取云端缩略图与补传本地缩略图；点击云卡片 `downloadCloudMeme` 下载（先 `setDownloading` 显示整卡 `cloud_mask` 遮罩防重复点击）→ SHA-256/大小/尺寸校验 → 按清单文件名入库 → 后补标签/分组/收藏 → 成功经 `wipeDownloadingMask` 遮罩自上而下退场动画后刷新网格并自动走分享链路（失败即时摘遮罩）；长按云卡片/菜单/整理模式勾选/拖拽排序持久化均过滤负 id 云行（`id > 0`），设置页两个开关 + 首配存储类型「开启/关闭」确认弹窗；单测 `CloudDirectTest`（8 例：合并顺序、差集安全校验、标签/分组/收藏回填、负 id、清单序、sha 校验、默认键）
-
-### 未实现（后续待做）
-- 从手机QQ缓存导入（当前为占位 Toast，后续用 Shizuku 授权后 ADB 获取文件）
+- 从手机QQ缓存导入（Shizuku）：导入菜单第三项从占位 Toast 改为完整链路 —— Shizuku 权限三态（`ShizukuBridge`）→ 扫描候选根（`QqCacheImporter.scan`，QQ_Favorite/chatpic/表情缓存，跳过 `.nomedia`）→ 目录/文件双栏可视化勾选（`dialog_qq_import.xml`：搜索、全选/清空、目录已选计数）→「导入」入表情库或「转存到…」SAF 写入用户所选目录，进度复用共享 `SyncProgressDialog`
+- `.nomedia` 数据目录标记（`StoragePaths.ensureNomedia`）：启动/改存储位置/恢复备份/向导选目录后在自有目录写空 `.nomedia`，阻止媒体库扫描表情缓存；同步上传以数据库驱动不会上传该文件

@@ -3,6 +3,7 @@ package com.ohmymeme.app
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.result.PickVisualMediaRequest
@@ -10,14 +11,18 @@ import androidx.core.content.FileProvider
 import android.text.Editable
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.ListView
 import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -31,6 +36,7 @@ import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var manageMode = false
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
+    private var qqExportEntries: List<QqCacheImporter.Entry> = emptyList()
     private var sidebarSwipeActive = false
     private var sidebarSwipeClosing = false
     private var sidebarSwipeConsumeUp = false
@@ -80,10 +87,30 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) startCloudDirect()
         }
+    private val qqExportTreeLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = if (result.resultCode == RESULT_OK) result.data?.data else null
+            val entries = qqExportEntries
+            qqExportEntries = emptyList()
+            if (uri != null && entries.isNotEmpty()) runQqExport(uri, entries)
+        }
+    private val qqPermissionListener =
+        Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+            if (requestCode == ShizukuBridge.PERMISSION_REQUEST_CODE) {
+                runOnUiThread {
+                    if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                        beginQqScan()
+                    } else {
+                        toast(getString(R.string.qq_permission_denied))
+                    }
+                }
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        Shizuku.addRequestPermissionResultListener(qqPermissionListener)
 
         setupLogo()
         setupTitleButtons()
@@ -94,6 +121,12 @@ class MainActivity : AppCompatActivity() {
         startCloudDirect()
         autoUpdateIfDue()
         handleIncomingIntent(intent)
+        executor.execute { StoragePaths.ensureNomedia(applicationContext) }
+    }
+
+    override fun onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(qqPermissionListener)
+        super.onDestroy()
     }
 
     /** 云端直接使用：先用缓存清单渲染云行，再后台刷新清单/预取缩略图/补传缩略图 */
@@ -1328,7 +1361,7 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.act_import_files -> pickImages()
                 R.id.act_import_album -> pickAlbumImages()
-                R.id.act_import_qq -> toast(getString(R.string.import_qq_pending))
+                R.id.act_import_qq -> startQqImport()
             }
             true
         }
@@ -1434,6 +1467,207 @@ class MainActivity : AppCompatActivity() {
                 if (result.errors.isNotEmpty()) msg += getString(R.string.import_errors, result.errors.size)
                 toast(msg)
                 reloadData()
+            }
+        }
+    }
+
+    /** 从手机QQ缓存导入：Shizuku 可用性 → 授权三态 → 扫描 → 多选弹窗（导入/转存） */
+    private fun startQqImport() {
+        if (!ShizukuBridge.available()) {
+            toast(getString(R.string.qq_not_available))
+            return
+        }
+        if (!ShizukuBridge.hasPermission()) {
+            try {
+                ShizukuBridge.requestPermission(ShizukuBridge.PERMISSION_REQUEST_CODE)
+            } catch (e: Throwable) {
+                android.util.Log.w(TAG, "requestPermission failed: $e")
+                toast(getString(R.string.qq_permission_denied))
+            }
+            return
+        }
+        beginQqScan()
+    }
+
+    private fun beginQqScan() {
+        toast(getString(R.string.qq_scanning))
+        executor.execute {
+            val entries = try {
+                QqCacheImporter.scan()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "qq cache scan failed: $e")
+                emptyList()
+            }
+            runOnUiThread {
+                if (entries.isEmpty()) {
+                    toast(getString(R.string.qq_import_empty))
+                } else {
+                    showQqPickDialog(entries)
+                }
+            }
+        }
+    }
+
+    private fun showQqPickDialog(entries: List<QqCacheImporter.Entry>) {
+        val view = layoutInflater.inflate(R.layout.dialog_qq_import, null)
+        val listDirs = view.findViewById<ListView>(R.id.qq_dirs)
+        val listFiles = view.findViewById<ListView>(R.id.qq_files)
+        val search = view.findViewById<EditText>(R.id.qq_search)
+        val selCount = view.findViewById<TextView>(R.id.qq_sel_count)
+        val selAll = view.findViewById<TextView>(R.id.qq_sel_all)
+
+        val grouped = linkedMapOf<String, MutableList<QqCacheImporter.Entry>>()
+        for (e in entries) grouped.getOrPut(QqCacheImporter.dirLabel(e)) { mutableListOf() }.add(e)
+        val dirNames = grouped.keys.toList()
+        val checked = HashSet<String>()
+        var currentDir = dirNames.first()
+        var query = ""
+        var fileItems: List<QqCacheImporter.Entry> = emptyList()
+
+        val dirAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_activated_1, mutableListOf<String>())
+        val fileAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf<String>())
+        listDirs.adapter = dirAdapter
+        listFiles.adapter = fileAdapter
+
+        fun updateCounters() {
+            selCount.text = getString(R.string.qq_sel_count, checked.size)
+            selAll.text =
+                if (checked.size < entries.size) getString(R.string.qq_select_all)
+                else getString(R.string.qq_clear_sel)
+            dirAdapter.clear()
+            dirAdapter.addAll(dirNames.map { dir ->
+                val list = grouped[dir].orEmpty()
+                val n = list.count { it.path in checked }
+                if (n > 0) "$dir（$n/${list.size}）" else "$dir（${list.size}）"
+            })
+            dirAdapter.notifyDataSetChanged()
+        }
+
+        fun renderFiles() {
+            fileItems = if (query.isEmpty()) {
+                grouped[currentDir].orEmpty()
+            } else {
+                entries.filter { it.path.substringAfterLast('/').contains(query, ignoreCase = true) }
+            }
+            fileAdapter.clear()
+            fileAdapter.addAll(fileItems.map {
+                if (query.isEmpty()) QqCacheImporter.fileNameLabel(it)
+                else QqCacheImporter.displayLabel(it)
+            })
+            fileAdapter.notifyDataSetChanged()
+            listFiles.clearChoices()
+            fileItems.forEachIndexed { i, e -> if (e.path in checked) listFiles.setItemChecked(i, true) }
+            updateCounters()
+        }
+
+        listDirs.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
+            currentDir = dirNames[pos]
+            renderFiles()
+        }
+        listFiles.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
+            val e = fileItems.getOrNull(pos)
+            if (e != null) {
+                if (listFiles.isItemChecked(pos)) checked.add(e.path) else checked.remove(e.path)
+                updateCounters()
+            }
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                query = s?.toString()?.trim().orEmpty()
+                renderFiles()
+            }
+        })
+        selAll.setOnClickListener {
+            if (checked.size < entries.size) {
+                checked.clear()
+                entries.forEach { checked.add(it.path) }
+            } else {
+                checked.clear()
+            }
+            renderFiles()
+        }
+
+        updateCounters()
+        listDirs.setItemChecked(0, true)
+        renderFiles()
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.qq_import_title)
+            .setView(view)
+            .setPositiveButton(getString(R.string.qq_import_confirm)) { _, _ ->
+                val picked = entries.filter { it.path in checked }
+                if (picked.isEmpty()) toast(getString(R.string.qq_select_none))
+                else runQqImport(picked)
+            }
+            .setNeutralButton(getString(R.string.qq_export_to)) { _, _ ->
+                val picked = entries.filter { it.path in checked }
+                if (picked.isEmpty()) toast(getString(R.string.qq_select_none))
+                else launchQqExport(picked)
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun runQqImport(entries: List<QqCacheImporter.Entry>) {
+        val ui = SyncProgressDialog.show(this, getString(R.string.qq_import_running))
+        syncExecutor.execute {
+            val result = try {
+                QqCacheImporter.importSelected(this, entries) { bytes, name ->
+                    ui.progress.report(bytes, name)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "qq import failed: $e")
+                runOnUiThread {
+                    ui.dismiss()
+                    toast(getString(R.string.qq_import_failed))
+                }
+                return@execute
+            }
+            runOnUiThread {
+                ui.dismiss()
+                var msg = getString(R.string.import_done, result.imported)
+                if (result.rejected > 0) msg += getString(R.string.import_rejected, result.rejected)
+                if (result.errors.isNotEmpty()) msg += getString(R.string.import_errors, result.errors.size)
+                toast(msg)
+                reloadData()
+            }
+        }
+    }
+
+    /** 转存到…：每次经系统目录选择器让用户指定转存位置，选定后写入所选目录 */
+    private fun launchQqExport(entries: List<QqCacheImporter.Entry>) {
+        qqExportEntries = entries
+        try {
+            qqExportTreeLauncher.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE))
+        } catch (e: Exception) {
+            qqExportEntries = emptyList()
+            android.util.Log.w(TAG, "open tree picker failed: $e")
+            toast(getString(R.string.qq_export_pick_failed))
+        }
+    }
+
+    private fun runQqExport(treeUri: Uri, entries: List<QqCacheImporter.Entry>) {
+        val ui = SyncProgressDialog.show(this, getString(R.string.qq_export_running))
+        syncExecutor.execute {
+            val counts = try {
+                QqCacheImporter.exportSelected(this, treeUri, entries) { bytes, name ->
+                    ui.progress.report(bytes, name)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "qq export failed: $e")
+                runOnUiThread {
+                    ui.dismiss()
+                    toast(getString(R.string.qq_export_failed, entries.size))
+                }
+                return@execute
+            }
+            runOnUiThread {
+                ui.dismiss()
+                var msg = getString(R.string.qq_export_done, counts.first)
+                if (counts.second > 0) msg += getString(R.string.import_errors, counts.second)
+                toast(msg)
             }
         }
     }

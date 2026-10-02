@@ -89,6 +89,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.xz)
     implementation(libs.androidx.documentfile)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)

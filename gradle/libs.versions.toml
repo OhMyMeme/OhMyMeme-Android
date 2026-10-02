@@ -11,6 +11,7 @@ constraintlayout = "2.1.4"
 xz = "1.9"
 documentfile = "1.0.1"
 orgJson = "20240303"
+shizuku = "13.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -24,6 +25,8 @@ androidx-constraintlayout = { group = "androidx.constraintlayout", name = "const
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

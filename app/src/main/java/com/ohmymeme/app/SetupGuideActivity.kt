@@ -35,6 +35,7 @@ class SetupGuideActivity : AppCompatActivity() {
             val rg = findViewById<RadioGroup>(R.id.rg_guide_storage)
             if (result.resultCode == RESULT_OK && uri != null && StoragePaths.persistDataTree(this, uri)) {
                 StoragePaths.setDataTree(this, uri)
+                Thread { StoragePaths.ensureNomedia(this) }.start()
                 val path = StoragePaths.resolveTreeUriPath(this, uri)?.absolutePath ?: uri.toString()
                 findViewById<TextView>(R.id.tv_guide_storage_path).text =
                     getString(R.string.guide_storage_picked, path)

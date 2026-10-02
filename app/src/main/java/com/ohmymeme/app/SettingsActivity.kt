@@ -337,6 +337,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun applyStorageTree(uri: Uri) {
         StoragePaths.setDataTree(this, uri)
         ConfigStore.invalidate()
+        Thread { StoragePaths.ensureNomedia(this) }.start()
     }
 
     // ─── 局域网互联 ───
@@ -670,6 +671,7 @@ class SettingsActivity : AppCompatActivity() {
                 } finally {
                     tmp.delete()
                 }
+                StoragePaths.ensureNomedia(this)
                 runOnUiThread {
                     btn.isEnabled = true
                     btn.text = getString(R.string.btn_restore)
