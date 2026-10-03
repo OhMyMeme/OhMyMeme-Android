@@ -10,7 +10,7 @@ import java.io.File
 import javax.imageio.ImageIO
 
 /**
- * 隐写 GIF 解码单测。fixture 由桌面端 D:\code\OhMyMeme\src\gif_stego.py 生成。
+ * 隐写 GIF 解码单测。fixture 由桌面端 src/gif_stego.py 生成。
  */
 class GifStegoTest {
 
