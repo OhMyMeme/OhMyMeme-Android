@@ -15,7 +15,7 @@ ConfigStore + CryptoUtil ──► config.json（密钥 AES-GCM 加密）
 ```
 
 ## 技术栈
-- **Kotlin** + AppCompat + RecyclerView + ConstraintLayout（无 Compose）
+- **Kotlin** + AppCompat + RecyclerView + ConstraintLayout（无 Compose），**JDK 17+**
 - **AGP 9.0.0** + Gradle 9.1，依赖用 `gradle/libs.versions.toml` 版本目录管理
 - **SQLite** (WAL)，schema 与桌面端 `src/database.py` 一致
 - **Android Keystore** (AES-GCM) 加密配置密钥字段
@@ -25,7 +25,7 @@ ConfigStore + CryptoUtil ──► config.json（密钥 AES-GCM 加密）
 ## 核心原则
 - **不重构桌面端** — 桌面端 `若用户提供了桌面端本地源码位置` 仅做最小必要修改；如需同步桌面端数据层逻辑，以 `database.py`/`config.py`/`webui.py` 为唯一事实来源
 - **存储结构对齐桌面端** — 表 schema、列名、重命名规则、缩略图命名、去重逻辑逐条对照，不得随意改动
-- **增改同步** — 新功能/新文件必须同步更新 `README.md` 和 `AGENTS.md`
+- **增改同步** — 新功能/新文件必须同步更新 `README.md`、`CONTRIBUTING.md` 和 `AGENTS.md`（用户可见改动进 README，构建/签名/CI 信息进 CONTRIBUTING，实现细节进 AGENTS）
 - **无 emoji**（除非用户要求）
 - **代码风格** — 无冗余注释；单线程 Executor 跑数据库/IO，`runOnUiThread` 回主线程更新 UI；Kotlin 按语言惯例写类型标注
 - 使用中文回答用户的问题（除非用户要求其他语言）
