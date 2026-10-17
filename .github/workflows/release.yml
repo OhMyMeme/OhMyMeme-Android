@@ -1,0 +1,117 @@
+name: Release
+
+# 手动触发的正式版发布：从 main 分支构建签名 APK 并创建 GitHub Release。
+# 版本号取自 app/build.gradle.kts 的 appVersionName；tag 与 release 标题均为该版本号（不带 v），
+# tag 指向 main 当前 HEAD。正文仅含 APK 下载链接，更新内容由维护者随后手动编辑。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Resolve version
+        id: resolve
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/.*appVersionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)
+          if [ -z "$version" ]; then
+            echo "ERROR: 无法从 app/build.gradle.kts 读取 appVersionName" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: 版本号格式非法: $version" >&2
+            exit 1
+          fi
+          git fetch --tags -q || true
+          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "ERROR: tag $version 已存在，放弃发布" >&2
+            exit 1
+          fi
+          sha=$(git rev-parse HEAD)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "解析到 version=$version sha=$sha"
+
+  build-apk:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Decode signing keystore
+        shell: bash
+        run: |
+          mkdir -p keystore
+          echo "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > keystore/ohmymeme-release.jks
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/keystore/ohmymeme-release.jks
+          KEYSTORE_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEYSTORE_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEYSTORE_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OhMyMeme-Android-release
+          path: app/build/outputs/apk/release/*.apk
+
+  publish:
+    needs: [prepare, build-apk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+
+          version = os.environ["VERSION"]
+          repo = os.environ["REPO"]
+          base = f"https://github.com/{repo}/releases/download/{version}"
+          apks = sorted(glob.glob("artifacts/**/*.apk", recursive=True))
+          if not apks:
+              raise SystemExit("ERROR: artifacts 中未找到 APK")
+          path = apks[0]
+          name = os.path.basename(path)
+          mb = round(os.path.getsize(path) / (1024 * 1024), 1)
+          size = f"{int(mb)} MB" if mb == int(mb) else f"{mb} MB"
+          notes = f"# v{version}\n\n[{name}]({base}/{name}) ({size})\n"
+          with open("notes.md", "w", encoding="utf-8") as f:
+              f.write(notes)
+          print(notes)
+          PY
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          gh release create "$VERSION" --repo "${{ github.repository }}" \
+            --target "$SHA" --title "$VERSION" --notes-file notes.md

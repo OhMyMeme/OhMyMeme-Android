@@ -94,7 +94,8 @@ Android/data/com.ohmymeme.app/
 ## CI（.github/workflows）
 
 - **`check.yml`**：push/PR 触发，JDK 17 运行 `compileDebugKotlin` + `lintDebug` + `testDebugUnitTest`
-- **`build.yml`**：Check 通过（main 分支）或手动触发，运行 `assembleRelease`（Secrets 解码签名密钥）并上传 `app/build/outputs/apk/release/*.apk` artifact
+- **`build.yml`**：仅手动触发，运行 `assembleRelease`（Secrets 解码签名密钥）并上传 `app/build/outputs/apk/release/*.apk` artifact
+- **`release.yml`**：手动触发的正式版发布——`prepare` 从 `main` 的 `app/build.gradle.kts` 读 `appVersionName`（校验格式、tag 不存在），`build-apk` 构建签名 APK，`publish` 生成正文（`# v<version>` + APK 下载链接）并 `gh release create <version> --target <main HEAD> --title <version>`（tag 与标题不带 v）
 
 ## 测试
 
