@@ -15,6 +15,7 @@ import java.io.File
 
 /**
  * 复制/分享前处理：对应桌面端 clipboard_util.py convert_image_mode_1/2/3。
+ * - mode 4（默认）：仅把原图字节复制为 .gif 后缀（不改内容、不转码），动图/静态均适用
  * - mode 1：静态图超限时缩放到 copy_resize_max 并存为 WebP（q90）；
  *   开启 copy_avoid_webp 时输出 JPG（不透明）/ PNG（带透明）
  * - mode 2：静态图超限时转为普通 GIF（256 色）
@@ -32,9 +33,10 @@ object MemeCopyProcessor {
 
     fun process(context: Context, stor: StorFile): Result? {
         val cfg = ConfigStore.get(context)
-        val mode = cfg.optInt("copy_resize_mode", 1)
+        val mode = cfg.optInt("copy_resize_mode", 4)
         val avoid = cfg.optBoolean("copy_avoid_webp", false)
         val maxSide = cfg.optInt("copy_resize_max", 200)
+        if (mode == 4) return copyAsGif(context, stor)
         if (mode == 0) return if (avoid) avoidWebp(context, stor, maxSide) else null
         if (FileUtils.isAnimatedFile(stor)) {
             return if (avoid) avoidWebp(context, stor, maxSide) else null
@@ -52,6 +54,26 @@ object MemeCopyProcessor {
             3 -> toStegoGif(context, stor, bounds.outWidth, bounds.outHeight)
             else -> null
         }
+    }
+
+    /** mode 4：原图字节原样复制到 cacheDir/share_gif/{stem}.gif（仅改后缀，不转码） */
+    private fun copyAsGif(context: Context, stor: StorFile): Result? {
+        return try {
+            val dir = File(context.cacheDir, "share_gif")
+            if (!dir.exists() && !dir.mkdirs()) return null
+            val out = File(dir, gifSuffixName(stor.name))
+            stor.copyTo(out)
+            Result(out, "image/gif")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "copyAsGif failed: $e")
+            null
+        }
+    }
+
+    /** 仅把扩展名替换为 .gif，文件名主体保持不变 */
+    internal fun gifSuffixName(name: String): String {
+        val stem = name.substringBeforeLast('.', name).ifEmpty { "image" }
+        return "$stem.gif"
     }
 
     /** WebP 兜底：动图转 GIF（等比缩到 maxSide），静态转 JPG（原分辨率）；非 WebP/失败返回 null */

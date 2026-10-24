@@ -55,7 +55,7 @@ app/src/main/
     GifStego.kt         # STG3 隐写检测 + 7 模式解码 + encode 写入（FULL/LZMA/WebP 候选）+ 自研 PNG 编码
     AndroidGifDecoder.kt# 设备端 WebP→RGBA（反预乘 alpha）
     Thumbnailer.kt      # 缩略图生成 {id}_{size}.png
-    MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 缩放 WebP / 转 GIF / 转隐写 GIF；copy_avoid_webp 开关走 avoidWebp（静态 WebP→PNG/JPG，动图回退原图）
+    MemeCopyProcessor.kt# 复制处理：分享前按 copy_resize_mode 仅改后缀为 GIF（默认）/ 缩放 WebP / 转 GIF / 转隐写 GIF；copy_avoid_webp 开关走 avoidWebp（静态 WebP→PNG/JPG，动图回退原图）
     WebpAnim.kt         # 动画 WebP 解析（RIFF/VP8X/ANIM/ANMF 子块）+ 帧包装，供 WebP→GIF
     BackupManager.kt    # 设置页 ZIP 备份/恢复（db+config+cache+thumbnails，staging 校验防路径穿越）
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）+ 云端直接使用（清单缓存/差集合并/点击下载/缩略图预取与补传）
@@ -95,7 +95,7 @@ Android/data/com.ohmymeme.app/
 - 单例：`MemeDb.get(context)`，用 `applicationContext` 防泄漏
 
 ### 配置（ConfigStore.kt）
-- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false`、`manifest_include_tags=true`、`manifest_include_favorites=true`、`cloud_direct=true`、`cloud_thumb_auto_push=true` 等）
+- `DEFAULTS` 逐字段照搬桌面端 `config.py`（含 `s3_path`、`webdav_timeout`、`record_recent_use=true`、`s3_addressing_style="virtual"`、`s3_signature_version="s3"`、`copy_avoid_webp=false`、`copy_resize_mode=4`、`manifest_include_tags=true`、`manifest_include_favorites=true`、`manifest_include_collections=true`、`cloud_direct=true`、`cloud_thumb_auto_push=true`、`webdav_allow_insecure=false` 等）
 - `SECRET_KEYS` 6 个密钥字段（s3_access_key/s3_secret_key/r2_access_key_id/r2_secret_access_key/ftp_password/webdav_password）写入前加密、读取后解密
 - `load()` 在读取时对密钥字段先解密；`save()` 加密副本后写盘；损坏文件回退默认值；**首次运行文件不存在时自动落盘默认配置**
 - 与桌面端差异：桌面端 Fernet，安卓端用 Android Keystore（硬件背书），格式不互通但字段名一致
@@ -209,8 +209,8 @@ Android/data/com.ohmymeme.app/
 - **多线程 + 进度回调**（对齐桌面端 `sync_threads`，默认 3，1-8）：`push`/`pull` 分块并发（`chunkList` + `ThreadPoolExecutor`），每块 worker 独立 `createBackend`/`connect` 连接（对应桌面端 `_push_worker`/`_pull_worker` 独立后端）；worker 内跳过/成功/失败分别计数，单文件失败不影响其余；pull 下载后统一回主线程写 DB（避免多线程并发写 SQLite）
 - `SyncProgress` 线程安全计数类（`filesTotal`/`bytesTotal`/`report`/`done`/`bytesDone`/`currentFile`/`startTime`/`onProgress` 回调），worker 线程回调、UI 自行 `runOnUiThread`
 - 对齐桌面端 `sync.py` + `manifest.py`：远端目录 `memes/`（REMOTE_MEME_DIR）+ `meme-index.json`（INDEX_FILENAME，清单 version 3）；远端根：FTP→`ftp_path`、WebDAV→`webdav_path`、对象存储→空
-- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致）；**`tags: [...]` 数组随条目写入**（受设置 `manifest_include_tags` 门控，默认开；关闭时条目不含该键），不再输出顶层 `tag_map`（读侧仍兼容回退）；**顶层 `favorite` 文件名数组**（无收藏为 `[]`，取自 `db.search(favoriteOnly=true)`，受设置 `manifest_include_favorites` 门控，默认开；关闭时整个 `favorite` 键不写入）
-- 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置；**S3 兼容阿里云 OSS**：`signature_version="s3"` 走 SigV2 签名（HMAC-SHA1 + `Authorization: AWS ak:base64`，`signV2`），`addressing_style="virtual"` 走虚拟主机寻址 `https://bucket.endpoint/key`（`urlForKey`），默认即 V2+virtual（对齐桌面端 `config.py` 默认）；R2 强制 SigV4 + path 寻址不变；endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层
+- 清单字段与桌面端一致：`memes[]`（filename/name/sha256/file_size/mtime，name 取 `original_name` 空时回退文件名去扩展名）+ `collections[]`（嵌套树，name/filenames/children；空集合在构建时自动 `deleteCollection`，与 `_build_collection_tree` 一致；受设置 `manifest_include_collections` 门控，默认开，关闭时整个 `collections` 键不写入，读侧缺失即跳过）；**`tags: [...]` 数组随条目写入**（受设置 `manifest_include_tags` 门控，默认开；关闭时条目不含该键），不再输出顶层 `tag_map`（读侧仍兼容回退）；**顶层 `favorite` 文件名数组**（无收藏为 `[]`，取自 `db.search(favoriteOnly=true)`，受设置 `manifest_include_favorites` 门控，默认开；关闭时整个 `favorite` 键不写入）
+- 后端实现（无第三方依赖，纯 `java.net`）：FTP 手写控制/数据通道（被动模式 PASV，STOR/RETR/SIZE/DELE/NLST/MKD，UTF-8）；S3/R2 用 `S3Backend`（isR2 标志读 r2_* 配置；**S3 兼容阿里云 OSS**：`signature_version="s3"` 走 SigV2 签名（HMAC-SHA1 + `Authorization: AWS ak:base64`，`signV2`），`addressing_style="virtual"` 走虚拟主机寻址 `https://bucket.endpoint/key`（`urlForKey`），默认即 V2+virtual（对齐桌面端 `config.py` 默认）；R2 强制 SigV4 + path 寻址不变；endpoint=`https://{account_id}.r2.cloudflarestorage.com`，list 用 `<Key>` 正则解析 ListObjectsV2）；WebDAV 用**原始 socket HTTP/1.1**（`davHttp`：任意方法 PROPFIND/MKCOL/PUT/GET/HEAD/DELETE，HTTPS 走 SSLSocket，每次独立建连 `Connection: close` 不复用，Content-Length/chunked/读到关闭三种响应体读取，下载流式写盘 `sink`）——因 Android `HttpURLConnection` 拒绝 PROPFIND/MKCOL（`ProtocolException: Expected one of ...`），与 FTP 一样手写协议层；**自签名证书**：默认走系统校验，`webdav_allow_insecure=true` 时改用信任所有证书的 `SSLContext`（仅该开关生效）；`testConnection` 捕获 `SSLHandshakeException` 并抛 `SyncError("WEBDAV_SSL_UNTRUSTED:<detail>")`，`syncTest` 原样返回该标记供设置页弹确认框
 - `downloadIndex` 下载远端清单到 dataDir 临时文件再解析，失败清理；`writeTempIndex` 上传前写本地临时清单
 - `push`：本地清单与远端清单按 `filename+sha256` 比对，相同且远端文件存在则跳过；`sync_delete_remote` 时删除远端多余文件；成功后合并远端仍保留的孤儿项重建清单并上传；上传失败即抛 `SyncError` 不更新远端清单
 - **Backend 接口只接受真实 `File`**（`uploadFile(local: File)/downloadFile(remotePath, dest: File)` 三实现不变）；cache/thumbnails 在 SAF 模式下经 `StorFile` 读写，push 上传前 `StorFile.copyTo(context.cacheDir 临时文件)` 物化，pull 先下载到 `context.cacheDir` 临时文件再 `createFile(fname, mime).writeFrom(tmp)` 落入 cache，用完删除
@@ -225,9 +225,10 @@ Android/data/com.ohmymeme.app/
 
 ### 设置页同步接线（SettingsActivity.kt）
 - `sp_sync_type` 位置→`sync_type` 映射：0 无 / 1 ftp / 2 s3 / 3 r2 / 4 webdav（`syncTypes` 列表）；`loadConfig` 回填 `setSelection`，`saveConfig` 写入
-- `sw_manifest_tags`（「将标签写入同步清单」，默认开）读写 `manifest_include_tags`，`loadConfig`/`saveConfig` 双向接线，只门控 `buildManifest` 写入；`sw_manifest_favorites`（「将收藏夹写入同步清单」，默认开）同理读写 `manifest_include_favorites`
+- `sw_manifest_tags`（「将标签写入同步清单」，默认开）读写 `manifest_include_tags`，`loadConfig`/`saveConfig` 双向接线，只门控 `buildManifest` 写入；`sw_manifest_favorites`（「将收藏夹写入同步清单」，默认开）同理读写 `manifest_include_favorites`；`sw_manifest_collections`（「将分组写入同步清单」，默认开）同理读写 `manifest_include_collections`。`setupManifestGuards` 给标签/分组两个开关挂 `OnCheckedChangeListener`：由开切关时弹 AlertDialog（关闭后将无法云同步标签/分组），取消/返回把开关恢复为开（`suppressManifestGuard` 防递归），确认后保持关闭、随「保存」原有流程落盘
+- `sw_webdav_insecure`（「忽略证书校验（不安全）」，默认关）读写 `webdav_allow_insecure`；「测试连接」走 `testConnection()`：`CloudSync.syncTest` 返回 `WEBDAV_SSL_UNTRUSTED:` 前缀时弹「服务器证书不受信任」确认框，「继续使用」勾选该开关、写配置 `webdav_allow_insecure=true` 并重试，「不使用」不改变配置
 - 「云端直接使用」（`sw_cloud_direct`，默认开）读写 `cloud_direct`、「启动时自动上传缩略图到云端」（`sw_cloud_thumb_push`，默认开）读写 `cloud_thumb_auto_push`，`loadConfig`/`saveConfig` 双向接线；`saveConfig` 检测 `sync_type` 由空首次变为非空时先弹确认框「开启云端直接使用？」（「开启」= 勾选 cloud_direct、「关闭」= 取消勾选、取消/Esc 保持当前勾选，三个出口均经 `doSaveConfig` 落盘，对齐桌面端 `showConfirm`）；`doSaveConfig` 内 `sync_type` 或 `cloud_direct` 变更时调用 `CloudSync.clearCloudCache` 清清单缓存
-- 测试连接/检查状态/危险操作（删除本地/云端）/孤儿清理跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；上传/下载走 `runCloudSync(isUpload)`：按 `show_upload_progress`/`show_download_progress` 弹共享进度对话框（`SyncProgressDialog`），完成后 Toast 摘要；`runSync(btnId, label, progressRes, block)` 恢复按钮文本并统一启停进度
+- 测试连接/检查状态/危险操作（删除本地/云端）/孤儿清理跑后台 `Thread` 后 `runOnUiThread` 用 Toast 呈现；「测试连接」单独走 `testConnection()` 识别 WebDAV 证书错误标记并弹确认框；上传/下载走 `runCloudSync(isUpload)`：按 `show_upload_progress`/`show_download_progress` 弹共享进度对话框（`SyncProgressDialog`），完成后 Toast 摘要；`runSync(btnId, label, progressRes, block)` 恢复按钮文本并统一启停进度
 - 「删除本地所有」复用 `MemeDb.deleteAll` + 清理 cache/缩略图；「删除云端所有」遍历远端清单删除文件+清单
 - 网格间距：`item_meme.xml` 卡片 `layout_margin 5dp`（对应桌面端网格 `gap: 10px`）
 
@@ -274,7 +275,7 @@ Android/data/com.ohmymeme.app/
 ## 已实现 / 未实现
 ### 复制处理（MemeCopyProcessor.kt + GifEncoder.kt + GifStego.encode）
 - 对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3`（`_resize_static_to_webp`/`_static_to_gif`/`_make_stego_gif`）+ `gif_stego.py` `_candidates`/`make_stego_gif`
-- `MemeCopyProcessor.process(context, file)`：`copy_resize_mode==0` 或 `isAnimatedFile`（动图）或未超 `copy_resize_max` 时返回 null 回退原图；模式 1 缩放 WebP(q90，ARGB_8888 解码，LANCZOS 语义用 `createScaledBitmap` 替代)、模式 2 转 GIF、模式 3 转隐写 GIF；**`copy_avoid_webp`（对齐桌面端 `webui.py` copy_meme 的 avoid）开启时**：动图直接回退原图，静态 WebP 走 `avoidWebp`（不生成不透明 WebP）——超限缩放改输出 PNG（有 alpha）/ JPG（`staticWebpToJpg` 白底 flatten，对齐 `_static_webp_to_jpg`），未超限静态 WebP 亦转 JPG；`toResized` 按 avoid 切换 PNG/JPG/WebP 输出
+- `MemeCopyProcessor.process(context, file)`：模式 4（默认）：`copyAsGif` 把原图字节经 `StorFile.copyTo` 复制到 `cacheDir/share_gif/{stem}.gif`（仅换后缀、不转码，动图/静态均适用，失败回退原图），返回 `image/gif`；`copy_resize_mode==0` 或 `isAnimatedFile`（动图）或未超 `copy_resize_max` 时返回 null 回退原图；模式 1 缩放 WebP(q90，ARGB_8888 解码，LANCZOS 语义用 `createScaledBitmap` 替代)、模式 2 转 GIF、模式 3 转隐写 GIF；**`copy_avoid_webp`（对齐桌面端 `webui.py` copy_meme 的 avoid）开启时**：动图直接回退原图，静态 WebP 走 `avoidWebp`（不生成不透明 WebP）——超限缩放改输出 PNG（有 alpha）/ JPG（`staticWebpToJpg` 白底 flatten，对齐 `_static_webp_to_jpg`），未超限静态 WebP 亦转 JPG；`toResized` 按 avoid 切换 PNG/JPG/WebP 输出
 - **动画 WebP → GIF**：`WebpAnim.parse`（RIFF/WEBP/VP8X 动画标志/ANIM 循环与 BGRA 背景/ANMF 帧头：24bit 尺寸与时长、no-blend=bit1、dispose 背景=bit0、VP8L/VP8/ALPH 子块）→ 逐帧 Canvas 合成（pendingClear dispose、no-blend CLEAR、等比缩放 ≤maxSide 不放大、argbToRgba）→ `GifEncoder.encodeAnimated`（GIF89a、无 GCT、NETSCAPE2.0 含终止字节 0x00、逐帧 GCE packed=0x04|(trans?1) delay=max(2,(ms+5)/10)、图像描述符局部色板 256、LZW 子块、trailer 0x3B）；`quantize(reserveTransparent)` 有透明帧时预留 1 色并记录 transIdx，不透明帧单帧字节与原实现一致
 - 像素对齐 Pillow：`getPixels` 取预乘 ARGB 后**反预乘**还原真实 RGB（同 `AndroidGifDecoder`）；kind 判定 `bmp.hasAlpha()`→RGBA、全像素 r==g==b→L、否则 RGB（对应桌面端 `_delta_data` 的 mode 判定）
 - `GifEncoder`（纯 JVM，可单测）：median cut 量化到 ≤256 色 + GIF89a/LZW 编码；**LZW 码长升位时机 = 新增条目后 `nextCode == (1 shl codeSize) + 1`**（非标准实现常见的 `== 1 shl codeSize`），与 `GifFrameDecoder.lzwDecode` 的 `dict.size == 1 shl codeSize` 延迟升位严格对应，已用 Python+Pillow 跨 512/1024/2048 边界与表满场景逐字节验证
@@ -285,6 +286,7 @@ Android/data/com.ohmymeme.app/
 - 主界面 / 设置页暗色 UI 复刻 + 桌面端布局复刻（顶栏折叠按钮 + logo + 图标、搜索框独立一行、标签行、左侧常驻分组树侧栏 `rv_sidebar` 默认收起）
 - 存储层：路径、SQLite 数据库、JSON 配置 + 密钥加密
 - 缓存扫描、SAF 导入（20MiB/2560px 上限，ImportOutcome/ImportResult 汇总）、缩略图生成
+- 主界面下拉刷新：`activity_main.xml` 的 `swipe_refresh`（SwipeRefreshLayout）包住网格 RecyclerView（空状态/整理底栏仍为兄弟层），`MainActivity.setupSwipeRefresh` 绑定监听 → `rescanCache(pullRefresh=true)` 复用缓存扫描 + `reloadData`，回主线程收起指示器；「更多」菜单已移除刷新项，仅保留上传/下载
 - 搜索（关键词实时，含**标签名**，对齐桌面端 `search_memes`）+ 标签行过滤（多选叠加，全含匹配）+ 空状态切换（插画 + 导入按钮）
 - 设置页保存/重置接真实配置
 - 首次设置向导（`SetupGuideActivity` 5 步：欢迎/存储/复制/云同步/完成，替换原首启 AlertDialog）
@@ -293,7 +295,7 @@ Android/data/com.ohmymeme.app/
 - 长按右键菜单（重命名/收藏/打标签/添加分组（两段式）/从最近使用中删除/删除）
 - 表情网格间距（卡片 5dp 外边距）
 - 更新下载镜像源回退（github.dpik.top 等 4 个镜像 + 直连）
-- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿；S3 兼容阿里云 OSS：V2 签名 + 虚拟主机寻址，设置页可切换 V4/AWS 标准）
+- 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿；S3 兼容阿里云 OSS：V2 签名 + 虚拟主机寻址，设置页可切换 V4/AWS 标准）；同步清单可分别关闭标签/分组/收藏写入（关闭标签或分组前弹确认框）；WebDAV 测试连接遇自签名证书弹「服务器证书不受信任」确认，继续则保存 `webdav_allow_insecure=true` 并重试，设置页可随时关闭该开关
 - 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses（受 `record_recent_use` 开关控制），最近使用分组自动刷新
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
 - 日志导出：设置页 `ACTION_CREATE_DOCUMENT` 选保存位置，后台 logcat `--pid` 写入文本文件
@@ -307,7 +309,7 @@ Android/data/com.ohmymeme.app/
 - 整理模式（多选批量操作）：顶栏整理图标进入，点击卡片勾选 + 底部操作栏「已选 n 项 / 全选 / 取消 / 批量删除 / 加入分组 / 打标签」（批量打标签为追加模式，单张仍覆盖），`MemeDb.deleteMemes` 单事务批量删 + 物理文件与缩略图清理；整理模式下拖拽 handle 始终可见可拖拽，tap=选中/handle=排序共存
 - 拖拽排序：已融入整理模式。仅在空搜索、全局或正数真实分组且至少 2 张卡片时，卡片左上手柄显示并允许排序。卡片主体点击分享、长按打开菜单，搜索/收藏夹/最近使用/未分类隐藏手柄；全局 `reorderMemes` / 分组内 `reorderCollectionMembers` 落库
 - 点击分享：点击网格卡片经 FileProvider（`file_paths.xml` 缓存路径）把原图复制到内部 cache 后用 `ACTION_SEND` 打开系统分享（微信/QQ 等），同时 `recordUse` 记最近使用；分享前按设置页「复制处理」模式处理超限静态图（见下方「复制处理」小节）
-- 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发；`copy_avoid_webp` 开启后动图 WebP 不转 GIF 直发、静态 WebP 走 PNG/JPG 输出（见上方「复制处理」小节）
+- 复制处理（GifEncoder + GifStego.encode + MemeCopyProcessor）：模式 4（默认，`copy_resize_mode=4`）仅把原图字节复制为 `cacheDir/share_gif/{stem}.gif`（后缀改为 GIF、内容不变，动图/静态均适用，文件名主体保持原样，接收方可直接当 GIF 发送）；模式 1/2/3 对应桌面端 `clipboard_util.py` `convert_image_mode_1/2/3` —— 超过 `copy_resize_max` 上限的静态图在分享前按模式 1 缩放 WebP(q90) / 模式 2 转普通 GIF(256 色) / 模式 3 转隐写 GIF（基座 GIF + STG3 写入原图数据，可无损还原）；动图/未超限/处理失败回退原图直发；`copy_avoid_webp` 开启后动图 WebP 不转 GIF 直发、静态 WebP 走 PNG/JPG 输出（见上方「复制处理」小节）
 - 备份与恢复（`BackupManager`）：设置页「备份数据」导出单 ZIP（meta + memes.db（`MemeDb.checkpoint` 先 WAL checkpoint）+ config.json + cache/ 全量 + thumbnails/）；「恢复数据」经 staging 解包校验（拒绝 `..`/绝对路径）后关库替换 DB、替换 config 并 `ConfigStore.reload`、SAF/真实路径双模迁移 cache/thumbnails，覆盖前弹确认框，完成后回设置页触发 `RESULT_OK` 刷新
 - Logo 点击回主页：清 `activeTags`/`activeCollectionId`/搜索框并 `reloadData()`
 - 云端同步效率：FTP/WebDAV `push`/`pull` 用连接级 `ensuredDirs` 缓存远端目录、循环外仅 `ensureRemoteDir(memeDir)` 一次（消除逐文件 MKO/重复建目录）

@@ -33,6 +33,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -116,6 +117,7 @@ class MainActivity : AppCompatActivity() {
         setupTitleButtons()
         setupBars()
         setupSearch()
+        setupSwipeRefresh()
         ensureFirstRunSetup()
         autoSyncIfConfigured()
         startCloudDirect()
@@ -1375,7 +1377,6 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.act_sync_push -> quickSync(isUpload = true)
                 R.id.act_sync_pull -> quickSync(isUpload = false)
-                R.id.act_refresh -> rescanCache()
             }
             true
         }
@@ -1434,10 +1435,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun rescanCache() {
+    /** 下拉刷新：复用缓存扫描 + 网格重载；扫描结束回主线程收起指示器 */
+    private fun setupSwipeRefresh() {
+        val swipe = findViewById<SwipeRefreshLayout>(R.id.swipe_refresh)
+        swipe.setColorSchemeResources(R.color.accent, R.color.primary_strong)
+        swipe.setProgressBackgroundColorSchemeResource(R.color.surface)
+        swipe.setOnRefreshListener { rescanCache(pullRefresh = true) }
+    }
+
+    private fun rescanCache(pullRefresh: Boolean = false) {
         executor.execute {
-            val added = CacheScanner.scan(this)
+            val added = try {
+                CacheScanner.scan(this)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "rescanCache failed: $e")
+                0
+            }
             runOnUiThread {
+                if (pullRefresh) {
+                    findViewById<SwipeRefreshLayout>(R.id.swipe_refresh).isRefreshing = false
+                }
                 toast(getString(R.string.scan_done, added))
                 reloadData()
             }
