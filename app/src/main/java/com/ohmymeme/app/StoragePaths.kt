@@ -174,4 +174,29 @@ object StoragePaths {
         f.parentFile?.mkdirs()
         return f
     }
+
+    /** 在自有数据目录写 .nomedia，阻止媒体库扫描表情缓存；云端同步以 DB 驱动，不会上传该文件 */
+    fun ensureNomedia(context: Context) {
+        for (marker in listOf(File(configRoot(context), ".nomedia"), File(dataDir(context), ".nomedia"))) {
+            try {
+                if (!marker.exists()) marker.createNewFile()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "write ${marker.path} failed: $e")
+            }
+        }
+        if (useSaf(context)) {
+            try {
+                val root = dataRoot(context)
+                if (!root.child(".nomedia").exists) {
+                    val created = root.createFile(".nomedia", "application/octet-stream")
+                    when {
+                        created.exists && created.name != ".nomedia" -> created.delete()
+                        !created.exists -> created.writeBytes(ByteArray(0))
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "write saf .nomedia failed: $e")
+            }
+        }
+    }
 }

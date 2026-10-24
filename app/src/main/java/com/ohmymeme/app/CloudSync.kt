@@ -19,14 +19,20 @@ import java.net.Socket
 import java.net.URL
 import java.net.URLDecoder
 import java.security.MessageDigest
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.Base64
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /**
  * 云端同步：FTP / S3（兼容 R2 / MinIO）/ WebDAV。
@@ -41,6 +47,24 @@ object CloudSync {
     private const val REMOTE_THUMB_DIR = "thumbnails"
     private const val CLOUD_INDEX_FILENAME = "cloud-index.json"
     private const val MANIFEST_VERSION = 3
+
+    /** syncTest 返回的 WebDAV 证书不受信任标记前缀 */
+    const val ERR_SSL_UNTRUSTED = "WEBDAV_SSL_UNTRUSTED:"
+
+    /** 仅 webdav_allow_insecure 开启时使用的信任所有证书上下文 */
+    private val insecureSslContext: SSLContext by lazy {
+        SSLContext.getInstance("TLS").apply {
+            init(
+                null,
+                arrayOf<TrustManager>(object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+                }),
+                SecureRandom()
+            )
+        }
+    }
 
     class SyncError(message: String) : Exception(message)
 
@@ -103,8 +127,10 @@ object CloudSync {
 
     internal fun buildManifest(ctx: Context): JSONObject {
         val db = MemeDb.get(ctx)
-        val includeTags = ConfigStore.get(ctx).optBoolean("manifest_include_tags", true)
-        val includeFavorites = ConfigStore.get(ctx).optBoolean("manifest_include_favorites", true)
+        val cfg = ConfigStore.get(ctx)
+        val includeTags = cfg.optBoolean("manifest_include_tags", true)
+        val includeFavorites = cfg.optBoolean("manifest_include_favorites", true)
+        val includeCollections = cfg.optBoolean("manifest_include_collections", true)
         val memes = JSONArray()
         for (m in db.getAll(0, Int.MAX_VALUE)) {
             val entry = JSONObject()
@@ -126,7 +152,9 @@ object CloudSync {
         val result = JSONObject()
             .put("version", MANIFEST_VERSION)
             .put("memes", memes)
-            .put("collections", buildCollectionTree(ctx, null))
+        if (includeCollections) {
+            result.put("collections", buildCollectionTree(ctx, null))
+        }
         if (includeFavorites) {
             val favs = JSONArray()
             for (m in db.search(favoriteOnly = true, limit = Int.MAX_VALUE)) favs.put(m.filename)
@@ -1081,6 +1109,7 @@ object CloudSync {
         private var baseUrl = ""
         private var authHeader = ""
         private var timeout = 30
+        private val allowInsecure = cfg.optBoolean("webdav_allow_insecure", false)
         private val ensuredDirs = mutableSetOf<String>()
 
         /** 简单 HTTP/1.1 响应：状态码 + 响应体字节 */
@@ -1111,6 +1140,8 @@ object CloudSync {
                 if (resp.code !in 200..299) throw SyncError("WebDAV PROPFIND returned HTTP ${resp.code}")
             } catch (e: SyncError) {
                 throw e
+            } catch (e: SSLHandshakeException) {
+                throw SyncError(ERR_SSL_UNTRUSTED + (e.message ?: "handshake failed"))
             } catch (e: IOException) {
                 throw SyncError("WebDAV 网络不可达: $e")
             }
@@ -1160,8 +1191,12 @@ object CloudSync {
                 raw.connect(InetSocketAddress(host, port), timeout * 1000)
                 raw.soTimeout = timeout * 1000
                 val sock: Socket = if (isTls) {
-                    val ssl = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                        .createSocket(raw, host, port, true) as SSLSocket
+                    val factory = if (allowInsecure) {
+                        insecureSslContext.socketFactory as SSLSocketFactory
+                    } else {
+                        SSLSocketFactory.getDefault() as SSLSocketFactory
+                    }
+                    val ssl = factory.createSocket(raw, host, port, true) as SSLSocket
                     ssl.startHandshake()
                     ssl
                 } else {

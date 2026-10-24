@@ -5,8 +5,26 @@
     <string name="import_menu_files">从文件导入</string>
     <string name="import_menu_album">从手机相册导入</string>
     <string name="import_menu_qq">从手机QQ缓存导入</string>
-    <string name="import_qq_pending">该功能开发中，后续将使用 Shizuku 获取文件</string>
-    <string name="refresh">刷新</string>
+    <string name="qq_import_title">从手机QQ缓存导入</string>
+    <string name="qq_search_hint">搜索文件名</string>
+    <string name="qq_col_dirs">目录</string>
+    <string name="qq_col_files">文件</string>
+    <string name="qq_sel_count">（已选 %1$d）</string>
+    <string name="qq_select_all">全选</string>
+    <string name="qq_clear_sel">清空</string>
+    <string name="qq_not_available">未检测到 Shizuku，请先安装并启动 Shizuku 后重试</string>
+    <string name="qq_permission_denied">未授予 Shizuku 权限，无法读取 QQ 缓存</string>
+    <string name="qq_scanning">正在扫描 QQ 缓存…</string>
+    <string name="qq_import_empty">未找到 QQ 缓存文件，请确认已安装手机 QQ</string>
+    <string name="qq_select_none">请先选择要处理的表情</string>
+    <string name="qq_import_confirm">导入</string>
+    <string name="qq_export_to">转存到…</string>
+    <string name="qq_import_running">正在导入…</string>
+    <string name="qq_export_running">正在转存…</string>
+    <string name="qq_export_done">已转存 %1$d 个表情到所选位置</string>
+    <string name="qq_export_failed">转存失败：%1$d 个</string>
+    <string name="qq_export_pick_failed">无法打开位置选择器</string>
+    <string name="qq_import_failed">导入失败</string>
     <string name="more_actions">更多操作</string>
     <string name="action_drag_to_reorder">拖动以调整顺序</string>
     <string name="settings">设置</string>
@@ -100,14 +118,15 @@
     <string name="settings_record_recent_use">复制/分享时记录最近使用</string>
 
     <string name="copy_process_title">复制处理</string>
-    <string name="copy_process_label">复制超限静态图时</string>
+    <string name="copy_process_label">复制处理方式</string>
     <string name="copy_mode_0">不处理，直接复制原图</string>
     <string name="copy_mode_1">缩放为 WebP</string>
     <string name="copy_mode_2">转换为 GIF</string>
     <string name="copy_mode_3">转换为 GIF 并隐写原图（可无损还原）</string>
-    <string name="copy_process_hint">复制超过尺寸上限的静态图时按此处模式处理；动图不受影响。隐写模式会把原图信息随 GIF 隐藏，接收方可运行解码工具还原，但会显著增大文件体积。</string>
+    <string name="copy_mode_4">仅修改后缀为 GIF</string>
+    <string name="copy_process_hint">默认「仅修改后缀为 GIF」会把原图字节原样复制并只改扩展名；其余模式仅在静态图超过尺寸上限时生效。隐写模式会把原图信息随 GIF 隐藏，接收方可运行解码工具还原，但会显著增大文件体积。</string>
     <string name="copy_avoid_webp_label">分享时避免 WebP</string>
-    <string name="copy_avoid_webp_hint">微信等应用会把 WebP 当作文件而非图片。开启后缩放输出 JPG（带透明转 PNG），WebP 静态图转 JPG、动画 WebP 转 GIF 再分享。</string>
+    <string name="copy_avoid_webp_hint">微信等应用会把 WebP 当作文件而非图片。开启后缩放输出 JPG（带透明转 PNG），WebP 静态图转 JPG、动画 WebP 转 GIF 再分享；「仅修改后缀为 GIF」模式不改动内容，不受此开关影响。</string>
 
     <string name="sync_title">云端同步</string>
     <string name="sync_auto_fetch">启动时自动获取远端索引</string>
@@ -132,6 +151,10 @@
     <string name="badge_cloud">云</string>
     <string name="settings_manifest_include_tags">将标签写入同步清单（meme-index.json）</string>
     <string name="settings_manifest_include_favorites">将收藏夹写入同步清单（meme-index.json）</string>
+    <string name="settings_manifest_include_collections">将分组写入同步清单（meme-index.json）</string>
+    <string name="manifest_disable_title">关闭同步清单写入</string>
+    <string name="manifest_tags_disable_message">关闭后将无法云同步标签，确定要关闭吗？</string>
+    <string name="manifest_collections_disable_message">关闭后将无法云同步分组，确定要关闭吗？</string>
     <string name="sync_storage_type">存储类型</string>
     <string name="sync_type_none">无</string>
     <string name="sync_type_ftp">FTP</string>
@@ -171,6 +194,12 @@
     <string name="webdav_user">用户名</string>
     <string name="webdav_password">密码</string>
     <string name="webdav_path_opt">远程路径（可选）</string>
+    <string name="webdav_allow_insecure">忽略证书校验（不安全）</string>
+    <string name="webdav_allow_insecure_hint">仅用于自签名证书的 WebDAV 服务器；开启后不再验证服务器身份。</string>
+    <string name="webdav_ssl_untrusted_title">服务器证书不受信任</string>
+    <string name="webdav_ssl_untrusted_message">服务器证书不受信任，是否仍要继续使用？\n%1$s</string>
+    <string name="webdav_ssl_continue">继续使用</string>
+    <string name="webdav_ssl_abort">不使用</string>
 
     <string name="btn_test_connection">测试连接</string>
     <string name="btn_check_sync_status">检查同步状态</string>
@@ -229,7 +258,7 @@
     <string name="guide_storage_custom">自定义位置（选择文件夹）</string>
     <string name="guide_storage_picked">已选择：%1$s</string>
     <string name="guide_copy_title">复制处理</string>
-    <string name="guide_copy_desc">通过微信、QQ 分享图片时，对超过 200px 上限的静态图的处理方式。</string>
+    <string name="guide_copy_desc">通过微信、QQ 分享图片时的处理方式。默认仅修改后缀为 GIF，其余模式对超过 200px 上限的静态图生效。</string>
     <string name="guide_sync_title">云同步</string>
     <string name="guide_sync_desc">多设备同步表情与分组。可以现在跳过，之后随时在设置页配置 FTP / S3 / R2 / WebDAV。</string>
     <string name="guide_done_title">配置完成</string>
@@ -323,6 +352,7 @@
         <item>@string/copy_mode_1</item>
         <item>@string/copy_mode_2</item>
         <item>@string/copy_mode_3</item>
+        <item>@string/copy_mode_4</item>
     </string-array>
 
     <string-array name="sync_type_options">

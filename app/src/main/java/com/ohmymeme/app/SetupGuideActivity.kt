@@ -35,6 +35,7 @@ class SetupGuideActivity : AppCompatActivity() {
             val rg = findViewById<RadioGroup>(R.id.rg_guide_storage)
             if (result.resultCode == RESULT_OK && uri != null && StoragePaths.persistDataTree(this, uri)) {
                 StoragePaths.setDataTree(this, uri)
+                Thread { StoragePaths.ensureNomedia(this) }.start()
                 val path = StoragePaths.resolveTreeUriPath(this, uri)?.absolutePath ?: uri.toString()
                 findViewById<TextView>(R.id.tv_guide_storage_path).text =
                     getString(R.string.guide_storage_picked, path)
@@ -71,7 +72,7 @@ class SetupGuideActivity : AppCompatActivity() {
 
     private fun setupCopyRadios() {
         val rg = findViewById<RadioGroup>(R.id.rg_guide_copy)
-        val current = ConfigStore.getInt(this, "copy_resize_mode", 1)
+        val current = ConfigStore.getInt(this, "copy_resize_mode", 4)
         resources.getStringArray(R.array.copy_mode_options).forEachIndexed { i, label ->
             val rb = RadioButton(this)
             rb.id = View.generateViewId()
@@ -111,7 +112,7 @@ class SetupGuideActivity : AppCompatActivity() {
 
     private fun saveCopyConfig() {
         val rg = findViewById<RadioGroup>(R.id.rg_guide_copy)
-        val mode = modeRadioIds[rg.checkedRadioButtonId] ?: 1
+        val mode = modeRadioIds[rg.checkedRadioButtonId] ?: 4
         ConfigStore.set(this, "copy_resize_mode", mode)
         ConfigStore.set(
             this,

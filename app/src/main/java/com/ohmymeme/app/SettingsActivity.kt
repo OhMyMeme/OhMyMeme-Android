@@ -11,6 +11,7 @@ import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
@@ -26,6 +27,7 @@ import java.io.InputStreamReader
 class SettingsActivity : AppCompatActivity() {
 
     private val TAG = "OhMyMeme/SettingsActivity"
+    private var suppressManifestGuard = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +38,7 @@ class SettingsActivity : AppCompatActivity() {
         setupSpinners()
         setupVersion()
         loadConfig()
+        setupManifestGuards()
         setupButtons()
         setupExportLogs()
         setupBackup()
@@ -80,7 +83,7 @@ class SettingsActivity : AppCompatActivity() {
         )
         findViewById<Spinner>(R.id.sp_copy_mode).let {
             it.adapter = copyAdapter
-            it.setSelection(1)
+            it.setSelection(4)
         }
 
         val syncAdapter = ArrayAdapter.createFromResource(
@@ -163,7 +166,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Spinner>(R.id.sp_s3_signature).setSelection(
             if (cfg.optString("s3_signature_version", "s3") == "s3v4") 1 else 0
         )
-        findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 1))
+        findViewById<Spinner>(R.id.sp_copy_mode).setSelection(cfg.optInt("copy_resize_mode", 4))
         findViewById<SwitchMaterial>(R.id.sw_copy_avoid_webp).isChecked =
             cfg.optBoolean("copy_avoid_webp", false)
         findViewById<Spinner>(R.id.sp_sync_type).setSelection(syncTypePosition(cfg.optString("sync_type", "")))
@@ -179,6 +182,8 @@ class SettingsActivity : AppCompatActivity() {
             cfg.optBoolean("manifest_include_tags", true)
         findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked =
             cfg.optBoolean("manifest_include_favorites", true)
+        findViewById<SwitchMaterial>(R.id.sw_manifest_collections).isChecked =
+            cfg.optBoolean("manifest_include_collections", true)
         findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked =
             cfg.optBoolean("sync_delete_remote", false)
         findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked =
@@ -213,12 +218,43 @@ class SettingsActivity : AppCompatActivity() {
         setText(R.id.et_wd_user, cfg.optString("webdav_user", ""))
         setText(R.id.et_wd_pass, cfg.optString("webdav_password", ""))
         setText(R.id.et_wd_path, cfg.optString("webdav_path", ""))
+        findViewById<SwitchMaterial>(R.id.sw_webdav_insecure).isChecked =
+            cfg.optBoolean("webdav_allow_insecure", false)
         setText(R.id.et_lan_port, cfg.optInt("lan_port", 17852).toString())
         setText(R.id.et_lan_secret, cfg.optString("lan_secret", ""))
     }
 
     private fun setText(id: Int, value: String) {
         findViewById<EditText>(id).setText(value)
+    }
+
+    /** 标签/分组写入同步清单的关闭确认：取消恢复为开，确认保持关闭（保存时落盘） */
+    private fun setupManifestGuards() {
+        bindManifestGuard(R.id.sw_manifest_tags, R.string.manifest_tags_disable_message)
+        bindManifestGuard(R.id.sw_manifest_collections, R.string.manifest_collections_disable_message)
+    }
+
+    private fun bindManifestGuard(id: Int, messageRes: Int) {
+        val sw = findViewById<SwitchMaterial>(id)
+        sw.setOnCheckedChangeListener { button, checked ->
+            if (!checked && !suppressManifestGuard) {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.manifest_disable_title))
+                    .setMessage(getString(messageRes))
+                    .setPositiveButton(getString(R.string.ok), null)
+                    .setNegativeButton(getString(R.string.cancel)) { _, _ ->
+                        restoreManifestSwitch(button)
+                    }
+                    .setOnCancelListener { restoreManifestSwitch(sw) }
+                    .show()
+            }
+        }
+    }
+
+    private fun restoreManifestSwitch(sw: CompoundButton) {
+        suppressManifestGuard = true
+        sw.isChecked = true
+        suppressManifestGuard = false
     }
 
     private fun setupButtons() {
@@ -229,9 +265,7 @@ class SettingsActivity : AppCompatActivity() {
             loadConfig()
             toast(getString(R.string.config_reset))
         }
-        findViewById<TextView>(R.id.btn_test_connection).setOnClickListener {
-            runSync(R.id.btn_test_connection, R.string.sync_testing) { CloudSync.syncTest(this) }
-        }
+        findViewById<TextView>(R.id.btn_test_connection).setOnClickListener { testConnection() }
         findViewById<TextView>(R.id.btn_check_sync_status).setOnClickListener {
             runSync(R.id.btn_check_sync_status, R.string.sync_checking) { CloudSync.checkSyncStatus(this) }
         }
@@ -337,6 +371,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun applyStorageTree(uri: Uri) {
         StoragePaths.setDataTree(this, uri)
         ConfigStore.invalidate()
+        Thread { StoragePaths.ensureNomedia(this) }.start()
     }
 
     // ─── 局域网互联 ───
@@ -670,6 +705,7 @@ class SettingsActivity : AppCompatActivity() {
                 } finally {
                     tmp.delete()
                 }
+                StoragePaths.ensureNomedia(this)
                 runOnUiThread {
                     btn.isEnabled = true
                     btn.text = getString(R.string.btn_restore)
@@ -732,6 +768,45 @@ class SettingsActivity : AppCompatActivity() {
                 runOnUiThread { toast(getString(R.string.log_export_failed)) }
             }
         }.start()
+    }
+
+    /** 测试连接：WebDAV 证书不受信任时确认是否忽略校验并重试 */
+    private fun testConnection() {
+        saveConfig()
+        val btn = findViewById<TextView>(R.id.btn_test_connection)
+        val original = btn.text.toString()
+        btn.isEnabled = false
+        btn.text = getString(R.string.sync_testing)
+        Thread {
+            val result = try {
+                CloudSync.syncTest(this)
+            } catch (e: Exception) {
+                e.message ?: "sync failed"
+            }
+            runOnUiThread {
+                btn.isEnabled = true
+                btn.text = original
+                if (result.startsWith(CloudSync.ERR_SSL_UNTRUSTED)) {
+                    promptInsecureCertificate(result.removePrefix(CloudSync.ERR_SSL_UNTRUSTED))
+                } else {
+                    toast(result)
+                }
+            }
+        }.start()
+    }
+
+    private fun promptInsecureCertificate(detail: String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.webdav_ssl_untrusted_title))
+            .setMessage(getString(R.string.webdav_ssl_untrusted_message, detail))
+            .setPositiveButton(getString(R.string.webdav_ssl_continue)) { _, _ ->
+                findViewById<SwitchMaterial>(R.id.sw_webdav_insecure).isChecked = true
+                ConfigStore.set(this, "webdav_allow_insecure", true)
+                ConfigStore.save(this)
+                testConnection()
+            }
+            .setNegativeButton(getString(R.string.webdav_ssl_abort), null)
+            .show()
     }
 
     private fun runSync(btnId: Int, progressRes: Int, block: () -> Any) {
@@ -938,6 +1013,7 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "sync_auto_sync", findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked)
         ConfigStore.set(this, "manifest_include_tags", findViewById<SwitchMaterial>(R.id.sw_manifest_tags).isChecked)
         ConfigStore.set(this, "manifest_include_favorites", findViewById<SwitchMaterial>(R.id.sw_manifest_favorites).isChecked)
+        ConfigStore.set(this, "manifest_include_collections", findViewById<SwitchMaterial>(R.id.sw_manifest_collections).isChecked)
         ConfigStore.set(this, "cloud_direct", findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked)
         ConfigStore.set(this, "cloud_thumb_auto_push", findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked)
         ConfigStore.set(this, "sync_type", newType)
@@ -973,6 +1049,8 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "webdav_user", textOf(R.id.et_wd_user))
         ConfigStore.set(this, "webdav_password", textOf(R.id.et_wd_pass))
         ConfigStore.set(this, "webdav_path", textOf(R.id.et_wd_path))
+        ConfigStore.set(this, "webdav_allow_insecure",
+            findViewById<SwitchMaterial>(R.id.sw_webdav_insecure).isChecked)
         ConfigStore.set(this, "lan_port", textOf(R.id.et_lan_port).toIntOrNull() ?: 17852)
         ConfigStore.set(this, "lan_secret", textOf(R.id.et_lan_secret))
 

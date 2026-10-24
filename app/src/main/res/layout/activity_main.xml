@@ -147,13 +147,19 @@
             android:layout_height="match_parent"
             android:layout_weight="1">
 
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rv_memes"
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/swipe_refresh"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:clipToPadding="false"
-                android:overScrollMode="never"
-                android:padding="12dp" />
+                android:layout_height="match_parent">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rv_memes"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:overScrollMode="never"
+                    android:padding="12dp" />
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
             <LinearLayout
                 android:id="@+id/empty_state"

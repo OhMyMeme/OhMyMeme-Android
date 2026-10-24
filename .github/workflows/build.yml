@@ -1,21 +1,15 @@
 name: Build
 
 on:
-  workflow_run:
-    workflows: ["Check"]
-    types:
-      - completed
-    branches: [main]
   workflow_dispatch:
 
 jobs:
   build-apk:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.ref }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

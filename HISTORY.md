@@ -6,6 +6,12 @@
 - **云角标改为云朵图标** — 云行左下角「云」文字角标替换为与桌面端一致的云朵描边图标（新增 `ic_cloud` 白色描边 + `bg_cloud_badge` 半透明黑圆底，18dp 圆形徽标）
 - **标签对话框美化** — 无匹配标签时显示空态提示「暂无匹配标签，输入后回车添加」（`tv_tag_empty`，`bind()` 按过滤结果切换）；输入框加高、整体边距对齐标题 24dp
 
+- **从手机QQ缓存导入（Shizuku）** — 导入菜单第三项从占位 Toast 改为完整链路：新增 `ShizukuBridge`（`available`/`hasPermission`/`requestPermission` 权限三态 + `exec`/`readFile` 远程 shell 执行，`Shizuku.newProcess` 在 13.1.5 为 private 故经反射调用，stderr 后台线程排空防管道死锁）与 `QqCacheImporter`（扫描 `/storage/emulated/0`、`/sdcard`、外置卷 × `QQ_Favorite`/`chatpic`/表情缓存候选根，`readlink -f | sort -u` 归一去重，`find` + `stat -c %s` 行解析并跳过非图片扩展名）；manifest 增 `ShizukuProvider` 与 `<queries>`，依赖 `dev.rikka.shizuku:api/provider` 13.1.5；MainActivity 权限回调后扫描 → 多选弹窗（默认全选）→「导入」走 `MemeImporter.importBytes` 全链路（>20MiB 跳过计 rejected）或「转存到…」经 `ACTION_OPEN_DOCUMENT_TREE` 每次现选目录、≤64MiB 整读并按魔数补正扩展名写入；进度复用共享 `SyncProgressDialog`
+- 新增 `QqCacheImporterTest`（18 例：行解析/畸形行与非图片过滤、`.nomedia` 排除、标签与体积格式、`dirLabel`/`fileNameLabel`、shellQuote 注入中和、候选根命令引号、exportName 魔数优先/回退、exportMime 映射）
+
+- **QQ 导入选择界面可视化改版** — 原扁平多选列表改为仿桌面端添加分组的双栏弹窗 `dialog_qq_import.xml`：顶部搜索框（按文件名跨目录过滤，命中时右栏显示根相对路径）、左栏目录列表（`dirLabel` 根相对路径 + 「已选/总数」计数、单选高亮）、右栏文件多选列表（`fileNameLabel` 文件名 + 体积，勾选状态按 path 跨目录/搜索保持）、「全选/清空」一键切换与「（已选 n）」计数；底部「导入 / 转存到… / 取消」三按钮不变
+- **数据目录 `.nomedia` 标记** — 新增 `StoragePaths.ensureNomedia`，在启动（MainActivity 后台执行）、设置页修改存储位置（`applyStorageTree`）、恢复备份、向导选择目录后向 `configRoot`/`dataDir` 真实目录与 SAF 树根写空 `.nomedia`，阻止媒体库扫描表情缓存；QQ 扫描 `isSkippedFile` 同步跳过 `.nomedia`；云端 push/pull/清单、LAN push 与缩略图补传均以数据库条目驱动，`.nomedia` 不入库**不会上传云端**，`remove_local`/`deleteAllLocal` 按库文件名删除亦不触碰
+
 - **云端直接使用（对齐桌面端 cloud_direct）** — `ConfigStore.DEFAULTS` 新增 `cloud_direct`/`cloud_thumb_auto_push`（均默认开）；`Meme.kt` 新增 `cloud` 字段（云行 id = `-(清单位置+1)` 负数保证 adapter tag 唯一）；`CloudSync` 新增云模块：`cloud-index.json` 清单缓存（内存 + dataDir 双层，`loadCloudManifest`/`refreshCloudManifest` 失败保留旧缓存，`clearCloudCache` 在 `sync_type`/`cloud_direct` 变更时清理）、`cloudMissing` 差集（`isSafeRemoteFname` + 64 位小写 `isSafeSha` 校验、跳过已本地，携带 tags/分组全路径/收藏）、`mergeCloudOrder` 合并（不在清单的本地行按原序排最前，其余按清单序穿插、云行补尾）、`prefetchCloudThumbs` 预取 `thumbnails/{sha}.webp`（失败整体重试一遍）、`autoPushThumbs` 补传（三重门控 cloud_direct + 开关 + sync_type，远端 listFiles 差集，缺失项用 `Thumbnailer.cloudThumbWebpBytes` 生成 150px WebP q85 上传，list 为空回退单查）、`downloadCloudMeme`（状态对齐桌面端 `download_meme`，流式 SHA-256 比对 → 20MiB/2560px 上限 → 按清单文件名去重入库 → `cloudBackfill` 后补标签并集/分组链逐段复用/收藏 INSERT OR IGNORE，busy 防重入）；主界面默认视图合并云行（左下角「云」角标，隐藏「⋯」/勾选/handle），点击云卡片下载成功后刷新网格并自动走分享链路；整理模式全选与拖拽排序持久化过滤 `id > 0`；设置页「云端同步」新增 `sw_cloud_direct`/`sw_cloud_thumb_push` 两开关，`saveConfig` 首配 `sync_type` 时弹「开启云端直接使用？」确认（开启=勾选、关闭=取消勾选、取消/Esc 保持当前勾选，均经 `doSaveConfig` 落盘，对齐桌面端 `showConfirm`）
 - 新增 `CloudDirectTest`（8 例：合并顺序 extras-first / 清单穿插 / 云尾、差集跳过本地与不安全名 / 缺 sha、名字回退 / 收藏 / 分组全路径、负数 id、清单序、`isSafeSha` 校验、`DEFAULTS` 默认键）
 - `Thumbnailer` 新增 `cloudThumbFile`/`cloudThumbBitmap`/`cloudThumbWebpBytes`/`decodeFit` 云缩略图读写辅助
@@ -25,6 +31,8 @@
 
 - **弹窗四角露白** — `AlertDialog.OhMyMeme` 原用 `android:background` 提供 `bg_dialog` 圆角背景，该属性不作用于窗口，PhoneWindow 回退系统白色 inset 背景导致弹窗四角露白；改用 `android:windowBackground`，并补 `android:textColorHint`（`muted`）与 `android:windowTitleStyle`（17sp 加粗、单行省略）
 - **弹窗按钮文字色不生效** — 框架 `android.app.AlertDialog` 的 AlertController 只认 `android:buttonBar*Style`，原主题只设无前缀 appcompat 版本导致「确定/取消」显示默认白色；两种前缀均补齐（确定 accent 蓝、取消 muted），title/colorPrimary 同步对齐
+- **弹窗按钮黑字（低对比）** — 主题新增 `NeutralButton.OhMyMeme` 并补 `buttonBarNeutral*Style` 双前缀（第三按钮如「转存到…」原为系统默认黑字），`Theme.OhMyMeme`/`AlertDialog.OhMyMeme` 补 `android:colorAccent`（多选勾选框与默认按钮着色）及 `textColorPrimary`/`textColorSecondary`（弹窗列表项、输入框、弹出菜单项文字统一亮色），`values` 与 `values-night` 两份主题同步修改
+- **「导入」「更多」弹出菜单显示系统原生样式** — 代码使用框架 `android.widget.PopupMenu` 只读 `android:popupMenuStyle`，原主题仅设无前缀 appcompat 键致样式未生效；补 `android:popupMenuStyle` 后 `PopupMenu.OhMyMeme`（`bg_popup` 暗色 8dp 圆角描边 + fg 文字）生效，菜单与弹窗视觉统一
 - **设置页上传/下载按钮状态** — 原 `runSync` 完成后永远把 `btn_sync_push` 恢复为默认文本（即使本次跑的是下载），改为按 `btnId` 恢复对应按钮文本
 
 ## 其他
