@@ -270,7 +270,7 @@ Android/data/com.ohmymeme.app/
 - `check.yml`：push/PR 触发，JDK 17 跑 `compileDebugKotlin` + `lintDebug` + `testDebugUnitTest`
 - `build.yml`：仅手动触发，跑 `assembleRelease`（Secrets 解码签名密钥）并上传
   `app/build/outputs/apk/release/*.apk` artifact
-- `release.yml`：手动触发的正式版发布，从 `main` 的 `app/build.gradle.kts` 读 `appVersionName`（tag/标题不带 v，指向 main HEAD），构建签名 APK 并创建 Release（正文为 `# v<version>` + APK 下载链接）
+- `release.yml`：手动触发的正式版发布，从 `main` 的 `app/build.gradle.kts` 读 `appVersionName`（tag/标题不带 v，指向 main HEAD），构建签名 APK，创建 Release 并用 `gh release upload` 上传 APK（正文为 `# v<version>` + APK 下载链接）
 
 ## 已实现 / 未实现
 ### 复制处理（MemeCopyProcessor.kt + GifEncoder.kt + GifStego.encode）
