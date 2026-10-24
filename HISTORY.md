@@ -7,6 +7,10 @@
 - **复制处理模式 4（默认）** — `copy_resize_mode` 默认改为 4：分享前把原图字节复制到 `cacheDir/share_gif/{stem}.gif`，仅改后缀、不转码，动图/静态均适用，失败回退原图；设置页与首次向导新增「仅修改后缀为 GIF」，原 0/1/2/3 模式保留
 - **WebDAV 自签名证书确认** — 新增 `webdav_allow_insecure`（默认关），开启时 WebDAV 使用信任所有证书的 `SSLContext`；「测试连接」捕获 `SSLHandshakeException` 并返回 `WEBDAV_SSL_UNTRUSTED:` 标记，设置页弹「继续使用/不使用」，继续则保存开关并重试，WebDAV 区块保留开关可随时关闭
 
+## 修复
+
+- **Release 未上传 APK** — `publish` 只执行 `gh release create`，没有调用 `gh release upload`，Release 正文有 APK 链接但资产为空；新增产物存在性校验与 `gh release upload <version> ... --clobber` 步骤。
+
 ## 其他
 
 - **版本号** — versionCode 14 / versionName 0.6.0
