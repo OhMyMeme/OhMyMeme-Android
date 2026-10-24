@@ -1,3 +1,18 @@
+# v0.6.0 — 手势刷新 + 清单分组开关 + 复制后缀模式 + WebDAV 证书确认
+
+## 新增
+
+- **主界面手势刷新** — 移除「更多」菜单的刷新项，表情网格改为下拉手势刷新（`SwipeRefreshLayout`）：触发后复用缓存扫描并重载网格，扫描结束自动收起指示器；列表仍为全量加载，无分页语义
+- **分组写入同步清单开关** — `DEFAULTS` 新增 `manifest_include_collections=true`，`buildManifest` 受该开关门控（关闭时整个 `collections` 键不写入）；设置页新增「将分组写入同步清单」，与标签开关一样在由开切关时弹确认「关闭后将无法云同步分组」，取消/返回恢复为开
+- **复制处理模式 4（默认）** — `copy_resize_mode` 默认改为 4：分享前把原图字节复制到 `cacheDir/share_gif/{stem}.gif`，仅改后缀、不转码，动图/静态均适用，失败回退原图；设置页与首次向导新增「仅修改后缀为 GIF」，原 0/1/2/3 模式保留
+- **WebDAV 自签名证书确认** — 新增 `webdav_allow_insecure`（默认关），开启时 WebDAV 使用信任所有证书的 `SSLContext`；「测试连接」捕获 `SSLHandshakeException` 并返回 `WEBDAV_SSL_UNTRUSTED:` 标记，设置页弹「继续使用/不使用」，继续则保存开关并重试，WebDAV 区块保留开关可随时关闭
+
+## 其他
+
+- **版本号** — versionCode 14 / versionName 0.6.0
+- 新增 `ConfigDefaultsTest`（默认复制模式/清单分组/WebDAV 开关/后缀文件名）
+- 更新 `README.md`、`AGENTS.md`
+
 # v0.5.6 — 云端直接使用 + 下载遮罩动画 + 传输进度弹窗
 
 ## 新增
