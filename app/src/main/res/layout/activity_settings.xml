@@ -337,6 +337,29 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:text="@string/settings_cloud_thumb_mobile_data"
+                    android:textColor="@color/fg_secondary"
+                    android:textSize="12.5sp" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_cloud_thumb_mobile_data"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="false" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="2dp"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:text="@string/settings_manifest_include_tags"
                     android:textColor="@color/fg_secondary"
                     android:textSize="12.5sp" />
@@ -1354,6 +1377,18 @@
                     android:background="@drawable/btn_secondary"
                     android:gravity="center"
                     android:text="@string/btn_lan_direct"
+                    android:textColor="@color/fg"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btn_lan_qr"
+                    android:layout_width="wrap_content"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:paddingHorizontal="16dp"
+                    android:background="@drawable/btn_secondary"
+                    android:gravity="center"
+                    android:text="@string/btn_lan_qr"
                     android:textColor="@color/fg"
                     android:textSize="12sp" />
             </LinearLayout>

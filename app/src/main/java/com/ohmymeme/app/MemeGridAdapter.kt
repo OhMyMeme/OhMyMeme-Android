@@ -120,6 +120,14 @@ class MemeGridAdapter(
         img.setColorFilter(context.getColor(R.color.muted))
         img.tag = meme.id
         name.text = meme.originalName.ifEmpty { meme.filename.substringBeforeLast('.') }
+        // 云卡片：名称左让位云角标（对齐桌面端 .cloud-card .meme-name 的 padding-left: 30px）
+        val namePadDp = if (meme.cloud) 30f else 7f
+        name.setPadding(
+            (namePadDp * holder.itemView.resources.displayMetrics.density).toInt(),
+            name.paddingTop,
+            name.paddingRight,
+            name.paddingBottom
+        )
         badge.visibility = View.GONE
         badge.text = ""
         cloudBadge.visibility = if (meme.cloud) View.VISIBLE else View.GONE

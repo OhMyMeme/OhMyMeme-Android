@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
@@ -45,6 +46,12 @@
         <activity
             android:name=".SetupGuideActivity"
             android:exported="false" />
+
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:configChanges="orientation|screenSize"
+            android:screenOrientation="portrait"
+            tools:replace="android:screenOrientation" />
 
         <service
             android:name=".QuickTileService"

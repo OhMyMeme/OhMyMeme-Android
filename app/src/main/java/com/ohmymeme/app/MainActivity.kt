@@ -4,9 +4,17 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.FrameLayout
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import android.text.Editable
 import android.text.Spannable
@@ -50,7 +58,13 @@ class MainActivity : AppCompatActivity() {
     private val activeTags = mutableSetOf<String>()
     private val expandedSidebarIds = mutableSetOf<Long>()
     private var sortModeEnabled = false
+    private var sortOrder = "manifest"
     private var manageMode = false
+    private lateinit var btnSortManifest: ImageView
+    private lateinit var btnSortName: TextView
+    private lateinit var syncTransferWrap: FrameLayout
+    private lateinit var syncTransferRing: TransferRingView
+    private val syncTransferHandler = Handler(Looper.getMainLooper())
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
     private var qqExportEntries: List<QqCacheImporter.Entry> = emptyList()
@@ -66,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         private const val COLLECTION_UNCATEGORIZED = -4L
         private const val EDGE_SWIPE_START_DP = 16
         private const val EDGE_SWIPE_DISTANCE_DP = 64
+        private val SORT_MODES = setOf("manifest", "manifest_desc", "name_asc", "name_desc")
     }
 
     private val importLauncher =
@@ -117,6 +132,8 @@ class MainActivity : AppCompatActivity() {
         setupTitleButtons()
         setupBars()
         setupSearch()
+        setupSortOrder()
+        setupSyncTransfer()
         setupSwipeRefresh()
         ensureFirstRunSetup()
         autoSyncIfConfigured()
@@ -138,6 +155,7 @@ class MainActivity : AppCompatActivity() {
         val on = cfg.optBoolean("cloud_direct", true) &&
             cfg.optString("sync_type", "").isNotEmpty()
         if (!on) return
+        val prefetchAllowed = isCloudThumbPrefetchAllowed()
         executor.execute {
             try {
                 CloudSync.refreshCloudManifest(this)
@@ -146,10 +164,12 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread { reloadData() }
             syncExecutor.execute {
-                try {
-                    CloudSync.prefetchCloudThumbs(this)
-                } catch (e: Exception) {
-                    android.util.Log.w(TAG, "cloud thumb prefetch failed: $e")
+                if (prefetchAllowed) {
+                    try {
+                        CloudSync.prefetchCloudThumbs(this)
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "cloud thumb prefetch failed: $e")
+                    }
                 }
                 try {
                     CloudSync.autoPushThumbs(this)
@@ -157,6 +177,27 @@ class MainActivity : AppCompatActivity() {
                     android.util.Log.w(TAG, "cloud thumb auto-push failed: $e")
                 }
             }
+        }
+    }
+
+    /** 启动批预取门控：移动网络且开关关闭时跳过；WiFi 不受限；滚动按需加载不受此门控影响 */
+    private fun isCloudThumbPrefetchAllowed(): Boolean {
+        val cfg = ConfigStore.get(this)
+        if (cfg.optBoolean("cloud_thumb_mobile_data", false)) return true
+        return !isOnMobileData()
+    }
+
+    private fun isOnMobileData(): Boolean {
+        return try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        } catch (e: SecurityException) {
+            // 缺少 ACCESS_NETWORK_STATE 时按非移动网络处理，不能因网络状态查询中断启动
+            android.util.Log.w(TAG, "network state unavailable: $e")
+            false
         }
     }
 
@@ -349,6 +390,158 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
+    }
+
+    private fun setupSortOrder() {
+        btnSortManifest = findViewById(R.id.btn_sort_manifest)
+        btnSortName = findViewById(R.id.btn_sort_name)
+        sortOrder = ConfigStore.get(this).optString("sort_mode", "manifest")
+            .takeIf { it in SORT_MODES } ?: "manifest"
+        btnSortManifest.setOnClickListener { toggleManifestSort() }
+        btnSortName.setOnClickListener { toggleNameSort() }
+        updateSortOrderUi()
+    }
+
+    /** 左块 manifest 正/反向切换，右块名称 A-Z/Z-A 切换 */
+    private fun toggleManifestSort() {
+        sortOrder = if (sortOrder == "manifest") "manifest_desc" else "manifest"
+        persistSortOrder()
+    }
+
+    private fun toggleNameSort() {
+        sortOrder = if (sortOrder == "name_asc") "name_desc" else "name_asc"
+        persistSortOrder()
+    }
+
+    private fun persistSortOrder() {
+        ConfigStore.set(this, "sort_mode", sortOrder)
+        ConfigStore.save(this)
+        updateSortOrderUi()
+        reloadData()
+    }
+
+    private fun updateSortOrderUi() {
+        val manifestActive = sortOrder.startsWith("manifest")
+        val nameActive = sortOrder.startsWith("name")
+        btnSortManifest.setImageResource(
+            if (sortOrder == "manifest_desc") R.drawable.ic_sort_asc else R.drawable.ic_sort_desc
+        )
+        btnSortManifest.contentDescription = getString(
+            if (sortOrder == "manifest_desc") R.string.sort_order_manifest_desc
+            else R.string.sort_order_manifest
+        )
+        applySortHalf(btnSortManifest, isLeft = true, active = manifestActive, desc = sortOrder == "manifest_desc")
+        btnSortName.text =
+            if (nameActive && sortOrder == "name_desc") getString(R.string.sort_name_za)
+            else getString(R.string.sort_name_az)
+        btnSortName.contentDescription = getString(
+            if (nameActive && sortOrder == "name_desc") R.string.sort_order_name_desc
+            else R.string.sort_order_name
+        )
+        applySortHalf(btnSortName, isLeft = false, active = nameActive, desc = sortOrder == "name_desc")
+    }
+
+    private fun applySortHalf(view: View, isLeft: Boolean, active: Boolean, desc: Boolean) {
+        val r = 8f * resources.displayMetrics.density
+        val radii = if (isLeft) floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+        else floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+        val bg = GradientDrawable()
+        bg.setCornerRadii(radii)
+        bg.setColor(
+            when {
+                !active -> Color.TRANSPARENT
+                desc -> ContextCompat.getColor(this, R.color.primary_strong)
+                else -> ContextCompat.getColor(this, R.color.accent)
+            }
+        )
+        view.background = bg
+        val contentColor = if (active) Color.WHITE else ContextCompat.getColor(this, R.color.muted)
+        when (view) {
+            is ImageView -> view.imageTintList = android.content.res.ColorStateList.valueOf(contentColor)
+            is TextView -> view.setTextColor(contentColor)
+        }
+    }
+
+    /** 按当前排序模式对展示列表排序（本地+云混合行均参与） */
+    private fun applySortOrder(rows: List<Meme>, collectionId: Long?): List<Meme> {
+        val mode = ConfigStore.get(this).optString("sort_mode", "")
+            .takeIf { it in SORT_MODES } ?: ""
+        if (mode.isEmpty()) return rows
+        val nameOf = { m: Meme -> m.originalName.ifEmpty { m.filename.substringBeforeLast('.') } }
+        if (mode == "name_asc" || mode == "name_desc") {
+            val cmp = Comparator<Meme> { a, b -> NameSorter.compare(nameOf(a), nameOf(b)) }
+            return if (mode == "name_asc") rows.sortedWith(cmp)
+            else rows.sortedWith(cmp).reversed()
+        }
+        val order = manifestOrderSource(collectionId)
+        if (order.isEmpty()) return rows
+        val pos = HashMap<String, Int>()
+        order.forEachIndexed { i, f -> if (f !in pos) pos[f] = i }
+        val extras = rows.filter { it.filename !in pos }
+        val paired = rows.filter { it.filename in pos }.sortedBy { pos[it.filename]!! }
+        return if (mode == "manifest") extras + paired else paired.asReversed() + extras
+    }
+
+    /** manifest 顺序源：云端清单（分组取子树序）→ 本地默认序（对齐桌面端本地清单回退） */
+    private fun manifestOrderSource(collectionId: Long?): List<String> {
+        val cloud: List<String> = try {
+            if (collectionId != null && collectionId > 0) {
+                CloudSync.cloudCollectionOrder(this, collectionId)
+            } else {
+                CloudSync.manifestOrderCached(this)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "manifest order source failed: $e")
+            emptyList()
+        }
+        if (cloud.isNotEmpty()) return cloud
+        return try {
+            MemeDb.get(this).getAll(0, Int.MAX_VALUE).map { it.filename }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 顶栏云端传输进度图标（复刻桌面端 SyncStatusBadge：files→bytes→不定进度环） */
+    private fun setupSyncTransfer() {
+        syncTransferWrap = findViewById(R.id.sync_transfer_wrap)
+        syncTransferRing = findViewById(R.id.sync_transfer_ring)
+    }
+
+    private val syncTransferPolling = object : Runnable {
+        override fun run() {
+            val s = CloudSync.transferState()
+            if (s.active) {
+                syncTransferWrap.visibility = View.VISIBLE
+                when {
+                    s.filesTotal > 0 -> syncTransferRing.setProgress(
+                        minOf(s.filesDone.toFloat() / s.filesTotal, 0.99f)
+                    )
+                    s.bytesTotal > 0 -> syncTransferRing.setProgress(
+                        minOf(s.bytesDone.toFloat() / s.bytesTotal, 0.99f)
+                    )
+                    else -> syncTransferRing.setIndeterminate()
+                }
+            } else {
+                syncTransferWrap.visibility = View.GONE
+                syncTransferRing.reset()
+            }
+            syncTransferHandler.postDelayed(this, 600)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        syncTransferHandler.postDelayed(syncTransferPolling, 600)
+    }
+
+    override fun onStop() {
+        syncTransferHandler.removeCallbacks(syncTransferPolling)
+        if (::syncTransferWrap.isInitialized) {
+            syncTransferWrap.visibility = View.GONE
+            syncTransferRing.reset()
+        }
+        super.onStop()
     }
 
     private fun setupBars() {
@@ -949,7 +1142,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
             }
-            val rows = display
+            val rows = applySortOrder(display, collectionId)
             runOnUiThread {
                 if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->

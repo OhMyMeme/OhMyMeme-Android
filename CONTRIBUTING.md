@@ -7,6 +7,8 @@
 - JDK 17+、Android Studio（AGP 9.0.0, Gradle 9.1）
 - Android SDK 36（compileSdk / targetSdk），minSdk 28
 - 依赖用 `gradle/libs.versions.toml` 版本目录管理
+- 扫码连接二维码依赖 `com.journeyapps:zxing-android-embedded`（自带 Camera 权限与扫码 Activity，经 `ScanContract` 走 Activity Result API）
+- `AndroidManifest.xml` 声明 `INTERNET` 与 `ACCESS_NETWORK_STATE`（后者供「移动网络时是否预取云端缩略图」判定，缺失时 `ConnectivityManager.activeNetwork` 抛 `SecurityException` 导致启动崩溃）
 
 ```bash
 ./gradlew :app:compileDebugKotlin   # 快速编译验证（约 12-19s）
@@ -70,6 +72,7 @@
 | `WebpAnim.kt` | 动画 WebP 解析（RIFF/VP8X/ANIM/ANMF），WebP→GIF 帧源 |
 | `CloudSync.kt` | 云端同步（FTP/S3/R2/WebDAV + `meme-index.json` 清单 v3）+ 云端直接使用 |
 | `LanClient.kt` | 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话，协议逐字节对齐桌面端 `lan.py`） |
+| `TransferRingView.kt` | 顶栏云端传输进度环（自绘轨道 + 进度弧/不定进度动画） |
 | `QqCacheImporter.kt` + `ShizukuBridge.kt` | 手机 QQ 缓存扫描（Shizuku 远程 shell）+ 双栏可视化勾选导入/转存 |
 | `BackupManager.kt` | ZIP 备份/恢复（staging 校验防路径穿越） |
 | `UpdateChecker.kt` | 版本更新检查（GitHub Releases + 24h TTL + 镜像下载） |

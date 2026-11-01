@@ -102,6 +102,25 @@ object CloudSync {
         fun bytesDone(): Long = synchronized(lock) { bytesDone }
     }
 
+    // 当前云端传输状态（供主界面顶栏传输进度图标轮询；push/pull 期间非空）
+    data class TransferState(
+        val active: Boolean,
+        val direction: String,
+        val filesDone: Int,
+        val filesTotal: Int,
+        val bytesDone: Long,
+        val bytesTotal: Long,
+    )
+
+    @Volatile private var currentProgress: SyncProgress? = null
+    @Volatile private var currentDirection: String = ""
+
+    fun transferState(): TransferState {
+        val p = currentProgress
+        if (p == null) return TransferState(false, "", 0, 0, 0L, 0L)
+        return TransferState(true, currentDirection, p.done(), p.filesTotal, p.bytesDone(), p.bytesTotal)
+    }
+
     private data class WorkerResult(
         val done: Int = 0,
         val errors: Int = 0,
@@ -406,6 +425,63 @@ object CloudSync {
     }
 
     fun manifestOrderCached(ctx: Context): List<String> = manifestOrder(loadCloudManifest(ctx))
+
+    /** 云端清单分组子树序（本组 filenames 在前，递归子组接后）；未找到返回空列表 */
+    fun cloudCollectionOrder(ctx: Context, collectionId: Long): List<String> {
+        val manifest = loadCloudManifest(ctx) ?: return emptyList()
+        val path = collectionNamePath(ctx, collectionId)
+        if (path.isEmpty()) return emptyList()
+        val node = findManifestCollection(manifest.optJSONArray("collections"), path)
+            ?: return emptyList()
+        return flattenCollectionNode(node)
+    }
+
+    private fun collectionNamePath(ctx: Context, collectionId: Long): String {
+        val byId = HashMap<Long, MemeDb.Collection>()
+        for (c in MemeDb.get(ctx).getCollections()) byId[c.id] = c
+        val parts = mutableListOf<String>()
+        var cur: Long? = collectionId
+        var guard = 0
+        while (cur != null && cur > 0 && guard++ < 16) {
+            val c = byId[cur] ?: break
+            parts.add(c.name)
+            cur = c.parentId
+        }
+        return parts.reversed().joinToString("/")
+    }
+
+    private fun findManifestCollection(
+        nodes: JSONArray?, target: String, prefix: String = ""
+    ): JSONObject? {
+        if (nodes == null) return null
+        for (i in 0 until nodes.length()) {
+            val node = nodes.optJSONObject(i) ?: continue
+            val name = node.optString("name", "")
+            val path = if (prefix.isEmpty()) name else "$prefix/$name"
+            if (path == target) return node
+            findManifestCollection(node.optJSONArray("children"), target, path)?.let { return it }
+        }
+        return null
+    }
+
+    private fun flattenCollectionNode(node: JSONObject): List<String> {
+        val out = mutableListOf<String>()
+        val fns = node.optJSONArray("filenames")
+        if (fns != null) {
+            for (i in 0 until fns.length()) {
+                val f = fns.optString(i, "")
+                if (f.isNotEmpty()) out.add(f)
+            }
+        }
+        val children = node.optJSONArray("children")
+        if (children != null) {
+            for (i in 0 until children.length()) {
+                val child = children.optJSONObject(i) ?: continue
+                out.addAll(flattenCollectionNode(child))
+            }
+        }
+        return out
+    }
 
     /** 按文件名取当前清单中的云条目（已本地/不在清单返回 null） */
     fun cloudEntry(ctx: Context, filename: String): CloudEntry? {
@@ -1574,6 +1650,20 @@ object CloudSync {
     }
 
     fun push(ctx: Context, progress: SyncProgress? = null): SyncResult {
+        val p = progress ?: SyncProgress()
+        currentProgress = p
+        currentDirection = "upload"
+        return try {
+            pushImpl(ctx, p)
+        } finally {
+            if (currentProgress === p) {
+                currentProgress = null
+                currentDirection = ""
+            }
+        }
+    }
+
+    private fun pushImpl(ctx: Context, progress: SyncProgress): SyncResult {
         android.util.Log.d(TAG, "push start")
         val cfg = ConfigStore.get(ctx)
         val root = remoteRoot(cfg)
@@ -1597,10 +1687,8 @@ object CloudSync {
         val entries = local.entries.toList()
         val filesTotal = entries.size
         val bytesTotal = entries.sumOf { (fname, _) -> cacheDir.child(fname).length }
-        progress?.let {
-            it.filesTotal = filesTotal
-            it.bytesTotal = bytesTotal
-        }
+        progress.filesTotal = filesTotal
+        progress.bytesTotal = bytesTotal
         val chunks = chunkList(entries, minOf(maxWorkers, filesTotal))
 
         val pool = Executors.newFixedThreadPool(chunks.size)
@@ -1727,6 +1815,20 @@ object CloudSync {
     }
 
     fun pull(ctx: Context, progress: SyncProgress? = null): SyncResult {
+        val p = progress ?: SyncProgress()
+        currentProgress = p
+        currentDirection = "download"
+        return try {
+            pullImpl(ctx, p)
+        } finally {
+            if (currentProgress === p) {
+                currentProgress = null
+                currentDirection = ""
+            }
+        }
+    }
+
+    private fun pullImpl(ctx: Context, progress: SyncProgress): SyncResult {
         android.util.Log.d(TAG, "pull start")
         val cfg = ConfigStore.get(ctx)
         val root = remoteRoot(cfg)
@@ -1751,10 +1853,8 @@ object CloudSync {
                 cacheDir.child(fname).exists
             ) 0L else rentry.optLong("file_size", 0L)
         }
-        progress?.let {
-            it.filesTotal = filesTotal
-            it.bytesTotal = bytesTotal
-        }
+        progress.filesTotal = filesTotal
+        progress.bytesTotal = bytesTotal
         val chunks = chunkList(entries, minOf(maxWorkers, filesTotal))
 
         val pool = Executors.newFixedThreadPool(chunks.size)

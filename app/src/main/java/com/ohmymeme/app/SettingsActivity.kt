@@ -1,4 +1,4 @@
-﻿package com.ohmymeme.app
+package com.ohmymeme.app
 
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -20,6 +20,8 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -174,6 +176,8 @@ class SettingsActivity : AppCompatActivity() {
             cfg.optBoolean("cloud_direct", true)
         findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked =
             cfg.optBoolean("cloud_thumb_auto_push", true)
+        findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_mobile_data).isChecked =
+            cfg.optBoolean("cloud_thumb_mobile_data", false)
         findViewById<SwitchMaterial>(R.id.sw_sync_fetch).isChecked =
             cfg.optBoolean("sync_auto_fetch_index", false)
         findViewById<SwitchMaterial>(R.id.sw_sync_auto).isChecked =
@@ -301,6 +305,11 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result?.contents ?: return@registerForActivityResult
+        handleLanQr(contents)
+    }
+
     private fun setupStorage() {
         findViewById<TextView>(R.id.tv_storage_path).text =
             getString(R.string.storage_current, StoragePaths.describeDataLocation(this))
@@ -384,6 +393,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_lan_scan).setOnClickListener { scanLan() }
         findViewById<TextView>(R.id.btn_lan_connect).setOnClickListener { connectLan() }
         findViewById<TextView>(R.id.btn_lan_direct).setOnClickListener { connectDirect() }
+        findViewById<TextView>(R.id.btn_lan_qr).setOnClickListener { scanLanQr() }
         findViewById<TextView>(R.id.btn_lan_pull).setOnClickListener {
             lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { c, p -> LanClient.pull(this, c, p) }
         }
@@ -561,6 +571,41 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         doConnect(LanClient.LanPeer(ip = ip, port = port, name = ip, os = "", ver = "", needSecret = false))
+    }
+
+    /** 扫码直连：调起相机识别二维码（电脑端 LAN 区块生成，内容 = IP + 端口 + 密钥） */
+    private fun scanLanQr() {
+        val options = ScanOptions()
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        options.setPrompt(getString(R.string.lan_qr_prompt))
+        options.setBeepEnabled(false)
+        // 竖屏扫描：与 manifest 的 CaptureActivity screenOrientation=portrait 一致
+        options.setOrientationLocked(true)
+        qrScanLauncher.launch(options)
+    }
+
+    private fun handleLanQr(raw: String) {
+        val obj = try {
+            org.json.JSONObject(raw.trim())
+        } catch (e: Exception) {
+            toast(getString(R.string.lan_qr_invalid))
+            return
+        }
+        if (obj.optString("app") != "ohmymeme") {
+            toast(getString(R.string.lan_qr_invalid))
+            return
+        }
+        val ip = obj.optString("ip")
+        val port = obj.optInt("port", 0)
+        if (ip.isEmpty() || port !in 1..65535) {
+            toast(getString(R.string.lan_qr_invalid))
+            return
+        }
+        val secret = obj.optString("secret", "")
+        findViewById<EditText>(R.id.et_lan_direct).setText("$ip:$port")
+        findViewById<EditText>(R.id.et_lan_secret).setText(secret)
+        if (secret.isNotEmpty()) toast(getString(R.string.lan_qr_secret_filled))
+        doConnect(LanClient.LanPeer(ip = ip, port = port, name = ip, os = "", ver = "", needSecret = secret.isNotEmpty()))
     }
 
     private fun doConnect(peer: LanClient.LanPeer) {
@@ -1016,6 +1061,7 @@ class SettingsActivity : AppCompatActivity() {
         ConfigStore.set(this, "manifest_include_collections", findViewById<SwitchMaterial>(R.id.sw_manifest_collections).isChecked)
         ConfigStore.set(this, "cloud_direct", findViewById<SwitchMaterial>(R.id.sw_cloud_direct).isChecked)
         ConfigStore.set(this, "cloud_thumb_auto_push", findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_push).isChecked)
+        ConfigStore.set(this, "cloud_thumb_mobile_data", findViewById<SwitchMaterial>(R.id.sw_cloud_thumb_mobile_data).isChecked)
         ConfigStore.set(this, "sync_type", newType)
         ConfigStore.set(this, "sync_delete_remote", findViewById<SwitchMaterial>(R.id.sw_delete_remote).isChecked)
         ConfigStore.set(this, "sync_remove_local", findViewById<SwitchMaterial>(R.id.sw_remove_local).isChecked)

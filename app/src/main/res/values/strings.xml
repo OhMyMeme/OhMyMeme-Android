@@ -1,6 +1,13 @@
 <resources>
     <string name="app_name">OhMyMeme</string>
     <string name="search_hint">搜索表情包...</string>
+    <string name="transfer_in_progress">云端传输进行中</string>
+    <string name="sort_order_manifest">manifest 排序（点击切换反向）</string>
+    <string name="sort_order_manifest_desc">manifest 反向排序（点击回到正序）</string>
+    <string name="sort_order_name">名称 A-Z 排序（点击切换 Z-A）</string>
+    <string name="sort_order_name_desc">名称 Z-A 排序（点击回到 A-Z）</string>
+    <string name="sort_name_az">A-Z</string>
+    <string name="sort_name_za">Z-A</string>
     <string name="action_import">导入</string>
     <string name="import_menu_files">从文件导入</string>
     <string name="import_menu_album">从手机相册导入</string>
@@ -133,6 +140,7 @@
     <string name="sync_auto_sync">启动时自动同步</string>
     <string name="settings_cloud_direct">云端直接使用（未下载的表情以云卡片展示，点击下载）</string>
     <string name="settings_cloud_thumb_push">启动时自动上传缩略图到云端</string>
+    <string name="settings_cloud_thumb_mobile_data">移动网络时下载云端缩略图（仅影响启动预取，滚动加载不受限）</string>
     <string name="cloud_confirm_title">开启云端直接使用？</string>
     <string name="cloud_confirm_message">首次配置云同步。开启后网格会展示云端尚未下载的表情（带「云」角标），点击即可下载使用；关闭则仅同步已下载的表情。</string>
     <string name="cloud_enable">开启</string>
@@ -282,6 +290,10 @@
     <string name="btn_lan_direct">直连</string>
     <string name="lan_direct_invalid">请输入合法的 IP:端口，如 192.168.1.100:17852</string>
     <string name="btn_lan_scan">扫描电脑</string>
+    <string name="btn_lan_qr">扫码连接</string>
+    <string name="lan_qr_prompt">对准电脑端「显示连接二维码」中的二维码</string>
+    <string name="lan_qr_invalid">二维码内容无效，请使用电脑端最新版生成的连接二维码</string>
+    <string name="lan_qr_secret_filled">已识别连接密钥，已自动填入</string>
     <string name="btn_lan_connect">连接</string>
     <string name="btn_lan_disconnect">断开</string>
     <string name="btn_lan_pull">拉取表情</string>

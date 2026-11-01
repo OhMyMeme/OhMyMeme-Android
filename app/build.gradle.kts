@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
+    implementation(libs.zxing.embedded)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)

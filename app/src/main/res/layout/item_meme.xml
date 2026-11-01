@@ -88,21 +88,6 @@
             android:textColor="@color/fg_secondary"
             android:textSize="15sp" />
 
-        <ImageView
-            android:id="@+id/tv_cloud_badge"
-            android:layout_width="18dp"
-            android:layout_height="18dp"
-            android:layout_gravity="bottom|start"
-            android:layout_marginStart="6dp"
-            android:layout_marginBottom="40dp"
-            android:background="@drawable/bg_cloud_badge"
-            android:contentDescription="@string/badge_cloud"
-            android:padding="3.5dp"
-            android:scaleType="center"
-            android:src="@drawable/ic_cloud"
-            android:visibility="gone"
-            app:tint="#FFFFFF" />
-
         <TextView
             android:id="@+id/tv_meme_name"
             android:layout_width="match_parent"
@@ -117,6 +102,21 @@
             android:paddingBottom="5dp"
             android:textColor="#CCFFFFFF"
             android:textSize="10.5sp" />
+
+        <ImageView
+            android:id="@+id/tv_cloud_badge"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="6dp"
+            android:layout_marginBottom="4dp"
+            android:background="@drawable/bg_cloud_badge"
+            android:contentDescription="@string/badge_cloud"
+            android:padding="3.5dp"
+            android:scaleType="center"
+            android:src="@drawable/ic_cloud"
+            android:visibility="gone"
+            app:tint="#FFFFFF" />
 
         <TextView
             android:id="@+id/cloud_mask"

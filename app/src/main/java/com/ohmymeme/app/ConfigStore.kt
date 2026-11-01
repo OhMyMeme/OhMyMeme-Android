@@ -35,6 +35,7 @@ object ConfigStore {
         "sync_threads" to 3,
         "cloud_direct" to true,
         "cloud_thumb_auto_push" to true,
+        "cloud_thumb_mobile_data" to false,
         "manifest_include_tags" to true,
         "manifest_include_favorites" to true,
         "manifest_include_collections" to true,
@@ -77,7 +78,8 @@ object ConfigStore {
         "auto_play_gif" to true,
         "try_original_image" to false,
         "lan_port" to 17852,
-        "lan_secret" to ""
+        "lan_secret" to "",
+        "sort_mode" to "manifest"
     )
 
     @Volatile

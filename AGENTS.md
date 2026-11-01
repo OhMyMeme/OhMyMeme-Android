@@ -60,6 +60,7 @@ app/src/main/
     BackupManager.kt    # 设置页 ZIP 备份/恢复（db+config+cache+thumbnails，staging 校验防路径穿越）
     CloudSync.kt        # 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单）+ 云端直接使用（清单缓存/差集合并/点击下载/缩略图预取与补传）
     LanClient.kt        # 局域网互联客户端（UDP 发现 + TCP 握手 + AES-GCM 会话）
+    TransferRingView.kt # 顶栏云端传输进度环（自绘轨道 + 进度弧/不定进度旋转）
     UpdateChecker.kt    # 版本更新检查（GitHub Releases API，24h TTL 启动自动检查）
     SetupGuideActivity.kt # 首次设置向导（5 步：欢迎/存储/复制/云同步/完成）
     QuickTileService.kt # 控制中心快捷磁贴（TileService，点击打开主界面）
@@ -193,6 +194,23 @@ Android/data/com.ohmymeme.app/
 - `clearView` 落库：`activeCollectionId > 0` 时 `reorderCollectionMembers(cid, ids)`，否则 `reorderMemes(ids)`，与桌面端 `reorder_collection_members`/`reorder_memes` 一致
 - `MemeGridAdapter` 持有可变 `items`，`move(from,to)` 用 `notifyItemMoved`，`currentIds()` 供落库取序
 
+### 列表排序切换（MainActivity.kt）
+- 搜索框左侧两段式按钮（`sort_order_wrap`：`btn_sort_manifest` ImageView + `btn_sort_name` TextView，中间 1dp 分隔线），点击各半块独立切换
+- 四种模式（`SORT_MODES`）：`manifest` / `manifest_desc` / `name_asc` / `name_desc`，存配置键 `sort_mode`（`ConfigStore.DEFAULTS` 默认 `manifest`），启动 `setupSortOrder` 回填并 `updateSortOrderUi` 上色（未激活透明、正序 accent、反向 primary_strong，`applySortHalf` 用 `GradientDrawable.setCornerRadii` 拼两段圆角）
+- `applySortOrder(rows, collectionId)` 在 `reloadData` 的展示列表上排序（本地+云混合行都参与）：名称模式用 `NameSorter.compare`（对齐桌面端 `_name_sort_key`，数字感知+拼音）；manifest 模式经 `manifestOrderSource` 取顺序源——正数分组走 `CloudSync.cloudCollectionOrder`（分组子树序），否则 `CloudSync.manifestOrderCached`（云清单缓存），云清单不可用回退 `MemeDb.getAll` 本地默认序
+- manifest 模式下不在清单的本地新行保持原序排最前（对齐桌面端合并语义），反向模式下清单内行倒序、清单外行放尾部
+- 归档：`ic_sort_desc`（3 个向下箭头）/`ic_sort_asc`（向上箭头）drawable，名称块直接用 `sort_name_az`/`sort_name_za` 文本
+
+### 顶栏云端传输进度（TransferRingView.kt）
+- 复刻桌面端 SyncStatusBadge 传输态：24dp 容器内 `TransferRingView`（自绘：轨道 1.6+进度弧 1.9，`onDraw` 按 width/24 缩放；`setProgress` 钳 0-0.99、`setIndeterminate` 用 `ValueAnimator` 旋转 1150ms）+ 中心 `ic_sync_transfer`（↑↓）
+- 数据源 `CloudSync.transferState()`（`currentProgress`/`currentDirection` 快照：active/filesDone/filesTotal/bytesDone/bytesTotal）；`syncTransferPolling` 每 600ms 轮询，files 总量优先、回退 bytes、均未知走不定进度；空闲 `visibility=GONE` + `reset()`
+- 生命周期：`onResume` postDelayed 启动、`onStop` removeCallbacks 并隐藏（不占上边栏）；LAN 传输仍用设置页进度浮层，不复用该图标
+
+### 移动网络缩略图门控（MainActivity.kt）
+- 配置 `cloud_thumb_mobile_data`（默认 false）：「使用移动数据时自动获取云端缩略图」；设置页云端同步区块开关 `sw_cloud_thumb_mobile_data`
+- `startCloudDirect` 在起后台线程前取一次 `isCloudThumbPrefetchAllowed()`（开关开→允许；否则 `!isOnMobileData()`），仅门控启动批量预取 `CloudSync.prefetchCloudThumbs`；`autoPushThumbs` 与滚动到云端行时的按需单图拉取不受限
+- `isOnMobileData` 经 `ConnectivityManager.activeNetwork` + `getNetworkCapabilities` 判 TRANSPORT_WIFI/CELLULAR；**必须声明 `android.permission.ACCESS_NETWORK_STATE`**（缺权限时该调用抛 `SecurityException`，会随 `onCreate` 直接崩溃）；方法内另捕获 `SecurityException` 按非移动网络降级（返回 false = 允许预取），保证启动不被网络状态查询中断
+
 ### 版本更新（UpdateChecker.kt）
 - **启动自动检查（24h TTL）**：`shouldCheck`/`markChecked`（SharedPreferences `update_check`，发起即打点），距上次检查超 24h 才在启动后台自动查一次（首跑跳过），避免每次启动重复弹更新框；设置页手动检查不受 TTL 限制
 - 桌面端 `updater.py` 迁移：`_parse_version` → `parseVersion`，`_pick_asset_url` → 遍历 assets 找 `.apk`
@@ -236,6 +254,7 @@ Android/data/com.ohmymeme.app/
 - **角色**：安卓端仅客户端，连接桌面端 `lan.py` 服务（UDP 发现 + TCP 握手 + AES-GCM 会话），协议逐字节对齐
 - **UDP 发现**：`discover(context, port)` 广播 `{"t":"discover"}` 到 255.255.255.255:port，收集 1.5s 内 `{"t":"hello","name","os","ver","need_secret"}` 应答去重返回 `LanPeer` 列表
 - **IP:端口 直连**：设置页新增直连输入框 + 「直连」按钮（`connectDirect`），解析 `IP:端口` 构造 `LanPeer` 直接走 `doConnect`（复用 `LanClient.connect`，跳过 UDP 扫描），状态显示「已连接 IP（直连）」
+- **扫码直连**：设置页「扫码连接」按钮（`btn_lan_qr`）经 `com.journeyapps:zxing-android-embedded` 的 `ScanContract`（`qrScanLauncher = registerForActivityResult(ScanContract())`）调起相机，`ScanOptions` 限定 QR 码 + 提示文案 `lan_qr_prompt`；**固定竖屏**：manifest 覆盖库内 `com.journeyapps.barcodescanner.CaptureActivity` 为 `screenOrientation="portrait"`（库默认 `fullSensor`，必须 `tools:replace="android:screenOrientation"`），且 `ScanOptions.setOrientationLocked(true)` 不让 CaptureActivity 解锁方向；`handleLanQr` 解析电脑端生成的 JSON（`{v,app:"ohmymeme",ip,port,secret}`），校验 `app` 与端口范围后回填直连输入框与密钥框（**电脑端设了互联密钥时自动填入**，Toast `lan_qr_secret_filled`）并直接 `doConnect`（免 UDP 发现），无效内容 Toast `lan_qr_invalid`
 - **TCP 握手**（对齐 `lan.py._handshake`）：有密钥时收 `challenge{nonce}` → 回 `proof{mac=HMAC-SHA256(secret,nonce)}` → `ok/no`（3 次）；无密钥直接收 `ok`，会话密钥 32 个零字节
 - **设备确认**（`connect` 内握手后）：客户端发 `device_info` 加密帧 `{cmd, name, model, os, ver}`（`Build.MODEL`/`MANUFACTURER`/`VERSION.RELEASE`/versionName），等待电脑端弹窗确认；`{ok:true, approved:true}` 才放行，`approved:false`/错误则 `LanError`，超时 `DEVICE_CONFIRM_TIMEOUT_MS`=60s；旧版电脑端回「未知命令」时提示升级；确认响应携带 `allow_secret_config` bool 存入 `LanConnection.allowSecretConfig`
 - **会话密钥**：`PBKDF2WithHmacSHA256(secret, salt="ohmy-meme-lan", 100000, 32)`（`deriveKey`）；无密钥返回零字节数组
@@ -314,6 +333,9 @@ Android/data/com.ohmymeme.app/
 - Logo 点击回主页：清 `activeTags`/`activeCollectionId`/搜索框并 `reloadData()`
 - 云端同步效率：FTP/WebDAV `push`/`pull` 用连接级 `ensuredDirs` 缓存远端目录、循环外仅 `ensureRemoteDir(memeDir)` 一次（消除逐文件 MKO/重复建目录）
 - 名称排序：`NameSorter`（数字感知 + 大小写不敏感，对齐桌面端 `_name_sort_key`）取代 SQL `ORDER BY name`
+- 列表排序切换：搜索框左侧两段式按钮（manifest 正/反向、名称 A-Z/Z-A），`sort_mode` 持久化到 `config.json`，全视图（全部/搜索/分组/标签/收藏/最近使用）生效，分组视图按分组子树清单序过滤成员
+- 顶栏云端传输进度：传输中显示「内圈 ↑↓ + 外圈进度环」（`TransferRingView` 自绘，files→bytes→不定进度，封顶 99%），空闲隐藏
+- 移动网络缩略图门控：`cloud_thumb_mobile_data` 默认关，移动数据下跳过启动批量预取云端缩略图（滚动按需单图加载不受限）；manifest 声明 `ACCESS_NETWORK_STATE`
 - UI 视觉对齐桌面端 `style.css`：slate 色板、卡片 2dp 描边、按钮/input 4dp、弹窗 12dp 圆角描边（`AlertDialog.OhMyMeme` 用 `android:windowBackground=@drawable/bg_dialog` 提供窗口圆角背景，`android:background` 不作用于窗口会露系统白角；按钮色走 `android:buttonBar*Style`（框架 AlertController 只认 android: 前缀）+ 兼容无前缀 appcompat 版本，标题 `android:windowTitleStyle` 17sp 加粗单行省略）、弹出菜单 8dp、状态栏+导航栏固定 `bg`、空状态插画+导入按钮、主按钮 `#1D4ED8`
 - 接收分享导入：MainActivity 声明 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`（image/*）intent-filter，`onCreate`/`onNewIntent` 取 `EXTRA_STREAM` URI 列表直接 `doImport`
 - 局域网互联：设置页「局域网互联」区块连接电脑端 `lan.py`，支持扫描发现/配对（发送设备信息待电脑端确认）/IP:端口 直连/拉取/上传/配置双向同步（弹窗确认）/密钥同步（电脑端 `allow_secret_config` 开关开启时动态显示，弹窗警告后同步）；拉取后同步分组（递归子集合）+ 标签
