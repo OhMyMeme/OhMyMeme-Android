@@ -291,6 +291,11 @@
     <string name="lan_direct_invalid">请输入合法的 IP:端口，如 192.168.1.100:17852</string>
     <string name="btn_lan_scan">扫描电脑</string>
     <string name="btn_lan_qr">扫码连接</string>
+    <string name="btn_lan_usb">USB 连接</string>
+    <string name="lan_usb_hint">经 USB 数据线连接电脑：请在电脑端开启「USB 互联」并允许 USB 调试授权，本机会以 127.0.0.1 回环直连，无需同一局域网</string>
+    <string name="lan_usb_adb_title">需要开启 USB 调试</string>
+    <string name="lan_usb_adb_msg">USB 互联需要本机开启「USB 调试」。点「去设置」在打开的设置页中找到并打开「USB 调试」开关，返回本应用后将自动连接。</string>
+    <string name="lan_usb_adb_go">去设置</string>
     <string name="lan_qr_prompt">对准电脑端「显示连接二维码」中的二维码</string>
     <string name="lan_qr_invalid">二维码内容无效，请使用电脑端最新版生成的连接二维码</string>
     <string name="lan_qr_secret_filled">已识别连接密钥，已自动填入</string>

@@ -254,6 +254,7 @@ Android/data/com.ohmymeme.app/
 - **角色**：安卓端仅客户端，连接桌面端 `lan.py` 服务（UDP 发现 + TCP 握手 + AES-GCM 会话），协议逐字节对齐
 - **UDP 发现**：`discover(context, port)` 广播 `{"t":"discover"}` 到 255.255.255.255:port，收集 1.5s 内 `{"t":"hello","name","os","ver","need_secret"}` 应答去重返回 `LanPeer` 列表
 - **IP:端口 直连**：设置页新增直连输入框 + 「直连」按钮（`connectDirect`），解析 `IP:端口` 构造 `LanPeer` 直接走 `doConnect`（复用 `LanClient.connect`，跳过 UDP 扫描），状态显示「已连接 IP（直连）」
+- **USB 直连**：设置页「USB 连接」按钮（`connectUsb`）先读 `Settings.Global` 的 `adb_enabled`（无需权限，读失败按已开启处理）——未开 USB 调试时弹对话框（`lan_usb_adb_*`）提示，点「去设置」置 `usbPending=true` 并以 intent action `android.settings.APPLICATION_DEVELOPMENT_SETTINGS` 跳转系统开发者选项页，`onResume` 见 `usbPending` 自动重走 `connectUsb`（已开启则直接连接，形成「跳转→开启→返回自动连」闭环）；已开启则读 `et_lan_port`（默认 `LanClient.DEFAULT_PORT`）构造 `127.0.0.1:port` 回填直连框并 `doConnect`，跳过 UDP 扫描；电脑端 `lan.py` 仅 USB 模式绑 `127.0.0.1` 回环并经 ADB `reverse` 端口转发把手机流量引到本机，故协议零改动、无需同一局域网；连接前 Toast `lan_usb_hint` 提示先在电脑端开启「USB 互联」并授权 USB 调试
 - **扫码直连**：设置页「扫码连接」按钮（`btn_lan_qr`）经 `com.journeyapps:zxing-android-embedded` 的 `ScanContract`（`qrScanLauncher = registerForActivityResult(ScanContract())`）调起相机，`ScanOptions` 限定 QR 码 + 提示文案 `lan_qr_prompt`；**固定竖屏**：manifest 覆盖库内 `com.journeyapps.barcodescanner.CaptureActivity` 为 `screenOrientation="portrait"`（库默认 `fullSensor`，必须 `tools:replace="android:screenOrientation"`），且 `ScanOptions.setOrientationLocked(true)` 不让 CaptureActivity 解锁方向；`handleLanQr` 解析电脑端生成的 JSON（`{v,app:"ohmymeme",ip,port,secret}`），校验 `app` 与端口范围后回填直连输入框与密钥框（**电脑端设了互联密钥时自动填入**，Toast `lan_qr_secret_filled`）并直接 `doConnect`（免 UDP 发现），无效内容 Toast `lan_qr_invalid`
 - **TCP 握手**（对齐 `lan.py._handshake`）：有密钥时收 `challenge{nonce}` → 回 `proof{mac=HMAC-SHA256(secret,nonce)}` → `ok/no`（3 次）；无密钥直接收 `ok`，会话密钥 32 个零字节
 - **设备确认**（`connect` 内握手后）：客户端发 `device_info` 加密帧 `{cmd, name, model, os, ver}`（`Build.MODEL`/`MANUFACTURER`/`VERSION.RELEASE`/versionName），等待电脑端弹窗确认；`{ok:true, approved:true}` 才放行，`approved:false`/错误则 `LanError`，超时 `DEVICE_CONFIRM_TIMEOUT_MS`=60s；旧版电脑端回「未知命令」时提示升级；确认响应携带 `allow_secret_config` bool 存入 `LanConnection.allowSecretConfig`
@@ -265,7 +266,7 @@ Android/data/com.ohmymeme.app/
 - **push**：先 `pullManifest` 拿远端文件名集合 → 本地 `getAll` 逐个 `pushFile`（桌面端 `_import_bytes` 内部哈希去重幂等）→ 最后 `pushManifest(CloudSync.buildManifest)` 同步顺序/分组/标签/收藏（条目内 `tags` 数组受 `manifest_include_tags` 门控，顶层 `favorite` 受 `manifest_include_favorites` 门控）
 - **配置同步（双向，独立按钮）**：「拉取配置」/「推送配置」两个独立按钮（`configOp` 后台执行），普通同步两端均剔除 `ConfigStore.SECRET_KEYS`（对齐桌面端 `allow_secret_config` 默认关）
 - **密钥同步（随开关动态显示）**：电脑端确认响应 `allow_secret_config=true` 时，设置页动态显示「拉取密钥」/「推送密钥」按钮（`lan_key_row` 可见性由 `updateKeyRow()` 控制）；点击先弹「请勿在公共网络或不信任的网络进行此操作！」警告，确认后走 `pullConfig`/`pushConfig` 的 `includeSecrets=true`（不过滤密钥字段，拉取后经 `ConfigStore.save` 用本机 Keystore 重新加密）；`allow_secret_config=false` 或未连接时按钮隐藏
-- **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
+- **UI**：设置页「局域网互联」区块（端口/密钥/IP:端口直连/USB 连接/扫码连接/扫描/连接/断开/拉取/上传/拉取配置/推送配置/拉取密钥/推送密钥），`LanConnection` 生命周期跟随 `SettingsActivity`（`onDestroy` 关闭）
 - **配置键**：`lan_port`（默认 17852）/`lan_secret`（`SECRET_KEYS` 加密存储，对齐桌面端 `_SECRET_KEYS`）
 
 ## 构建 & 验证

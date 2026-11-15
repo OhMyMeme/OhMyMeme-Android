@@ -1394,6 +1394,16 @@
             </LinearLayout>
 
             <TextView
+                android:id="@+id/btn_lan_usb"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:background="@drawable/btn_secondary"
+                android:gravity="center"
+                android:text="@string/btn_lan_usb"
+                android:textColor="@color/fg"
+                android:textSize="12sp" />
+
+            <TextView
                 android:id="@+id/tv_lan_status"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
@@ -30,6 +31,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private val TAG = "OhMyMeme/SettingsActivity"
     private var suppressManifestGuard = false
+    private var usbPending = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +49,14 @@ class SettingsActivity : AppCompatActivity() {
         setupStorage()
         setupLan()
         setupQuickSettings()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (usbPending) {
+            usbPending = false
+            connectUsb()
+        }
     }
 
     private fun setupTitle() {
@@ -394,6 +404,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btn_lan_connect).setOnClickListener { connectLan() }
         findViewById<TextView>(R.id.btn_lan_direct).setOnClickListener { connectDirect() }
         findViewById<TextView>(R.id.btn_lan_qr).setOnClickListener { scanLanQr() }
+        findViewById<TextView>(R.id.btn_lan_usb).setOnClickListener { connectUsb() }
         findViewById<TextView>(R.id.btn_lan_pull).setOnClickListener {
             lanOp(R.id.btn_lan_pull, getString(R.string.btn_lan_pull)) { c, p -> LanClient.pull(this, c, p) }
         }
@@ -571,6 +582,45 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         doConnect(LanClient.LanPeer(ip = ip, port = port, name = ip, os = "", ver = "", needSecret = false))
+    }
+
+    /** USB 直连：电脑端经 ADB 端口转发在本机回环上提供服务，直连 127.0.0.1，无需同一局域网 */
+    private fun connectUsb() {
+        val port = textOf(R.id.et_lan_port).toIntOrNull() ?: LanClient.DEFAULT_PORT
+        if (port !in 1..65535) {
+            toast(getString(R.string.lan_direct_invalid))
+            return
+        }
+        if (!adbEnabled()) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.lan_usb_adb_title))
+                .setMessage(getString(R.string.lan_usb_adb_msg))
+                .setPositiveButton(getString(R.string.lan_usb_adb_go)) { _, _ ->
+                    usbPending = true
+                    val intent = Intent("android.settings.APPLICATION_DEVELOPMENT_SETTINGS")
+                    try {
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        usbPending = false
+                        toast(e.message ?: getString(R.string.lan_usb_adb_msg))
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel) { d, _ -> d.dismiss() }
+                .show()
+            return
+        }
+        toast(getString(R.string.lan_usb_hint))
+        findViewById<EditText>(R.id.et_lan_direct).setText("127.0.0.1:$port")
+        doConnect(LanClient.LanPeer(ip = "127.0.0.1", port = port, name = "127.0.0.1", os = "", ver = "", needSecret = false))
+    }
+
+    /** 读取系统 USB 调试开关（adb_enabled 对应用可见，无需权限）；读失败按已开启处理 */
+    private fun adbEnabled(): Boolean {
+        return try {
+            Settings.Global.getInt(contentResolver, "adb_enabled", 0) == 1
+        } catch (e: Exception) {
+            true
+        }
     }
 
     /** 扫码直连：调起相机识别二维码（电脑端 LAN 区块生成，内容 = IP + 端口 + 密钥） */
