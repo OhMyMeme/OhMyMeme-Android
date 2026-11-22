@@ -52,7 +52,8 @@ class MemeGridAdapter(
 
     fun itemAt(position: Int): Meme? = items.getOrNull(position)
 
-    fun positionOfId(id: Long): Int = items.indexOfFirst { it.id == id }
+    fun positionOfFilename(filename: String): Int =
+        items.indexOfFirst { it.filename == filename }
 
     /** 云端下载状态用伴生对象，跨 adapter 实例（reloadData 重建）保持遮罩与防连点 */
     fun setDownloading(id: Long, active: Boolean) {

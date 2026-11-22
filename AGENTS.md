@@ -147,8 +147,9 @@ Android/data/com.ohmymeme.app/
 - 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
 ### 网格刷新与滚动保持（MainActivity.reloadData）
-- 视图标识 `keyword|collectionId|tags|sortOrder` 未变说明只是数据刷新，用 `ScrollAnchor`（首可见行表情 id + 相对内容区顶端偏移）复位滚动；变化（切筛选/排序）才回顶部。重建 adapter 会丢滚动状态，须 `scrollToPositionWithOffset` 复位，id 已删除时退回行号
-- 点击卡片分享只在最近使用视图（顺序会变）或侧栏可见（计数刷新）时触发刷新，其余视图不重载，避免打断滚动与延迟分享面板
+- 视图标识 `viewKeyOf`（标签 `长度:内容` 编码，防 `a, b` 与 `a`+`b` 撞车）未变即刷新，用 `ScrollAnchor`（首可见行文件名 + 相对内容区偏移）复位，重建 adapter 会丢滚动状态；云行 id 随清单漂移故按文件名，缺失退回行号
+- 被点击的表情会移到最近使用首位，锚点须跳过它另取可见行，否则负偏移在位置 0 失效回顶部
+- 分享仅最近使用视图或侧栏可见时重载；侧栏收起置 `sidebarBarsDirty`，展开补刷计数
 
 ### 长按右键菜单（MainActivity.kt）
 - `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 打标签 / 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
