@@ -154,7 +154,7 @@ Android/data/com.ohmymeme.app/
 
 ### 分组胶囊过滤（MainActivity.kt）
 - 顶栏标签行（`rv_tags`）点击标签过滤表情：多选叠加（`activeTags`，全含匹配 `memeIdsWithAllTags`），再次点击取消；选中态由 `ChipAdapter.activeItems` 控制（accent 色 + active 背景）
-- 分组/收藏/未分类过滤走左侧常驻侧栏（`rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头点击展开收起、整行点击单选切换 `activeCollectionId`，默认收起），分组单选切换，再次点击取消；**滑动手势**：侧栏收起时从屏幕左缘（≤16dp）右滑 ≥64dp 展开，展开时在侧栏内左滑 ≥64dp 收起（均要求水平主导），`MainActivity.dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP，避免滑动收起时误触分组行点击
+- 分组/收藏/未分类过滤走左侧抽屉侧栏（`sidebar_panel` 包 `rv_sidebar`，`SidebarTreeAdapter`，`SidebarRow(entry,depth,expanded)` 平铺树，箭头展开收起、整行单选切换 `activeCollectionId`，默认收起），再次点击取消；**滑动手势**：收起时从 start 边（LTR 左缘 / RTL 右缘，≤16dp）向 end 边滑 ≥64dp 展开，展开时反向滑 ≥64dp 收起（均要求水平主导），`dispatchTouchEvent` 仅观察不拦截子视图，触发后给子视图补发 CANCEL 并吞掉 UP；**抽屉式开合**：`animateSidebar` 只做 `translationX` 位移 + `sidebar_scrim` 淡入（180ms，`PathInterpolator(0.2,0.8,0.2,1)`），不改布局尺寸（早期 `layout_weight` 插值逐帧重排掉帧），故覆盖网格而非常驻挤压；`sidebarOffset` 按比例记录位移，RTL 与动画中改宽度（旋转/分屏）自动按新宽度换算；换向前先清空 `sidebarAnimator` 再 cancel，防旧回调提前 finish；返回键先收抽屉（`OnBackPressedCallback`）
 - `ChipAdapter` 泛型化（TAG 用 `String`，COLLECTION 用 `CollectionEntry(id,name,count,hasChildren)`），分组胶囊带数量，label 显示 `名称 (count)`；有子分组时追加 `▼`
 - 系统分组：收藏夹 `-2`（`favoriteOnly`）、最近使用 `-3`（`getRecent`）、未分类 `-4`（`uncategorizedOnly`，受 `ConfigStore` 的 `show_uncategorized` 控制且仅在计数 > 0 时显示，对齐桌面端 `webui.py` 系统分组），与桌面端 `get_collections` 一致
 - 过滤与关键词叠加后走 `MemeDb.search(keyword, tags, collectionId, favoriteOnly, offset, limit)`；收藏夹走 `favoriteOnly`，最近使用走 `getRecent`，无过滤时 `getAll`。`collectionId != null` 时 ORDER BY 按 `meme_collections.sort_order`（子查询）排序，与桌面端分组内排序一致
@@ -303,7 +303,7 @@ Android/data/com.ohmymeme.app/
 - 单测：`GifEncoderTest`（256 色内逐字节精确、灰度精确、跨边界稳定性）、`GifStegoEncodeTest`（RGB/L/RGBA 差值与 FULL 全图 encode→decode 逐字节还原，FULL 用「极小 origBytes + 大差值」保证选中）、`WebpAnimTest`、`GifEncoderAnimatedTest`（动画头/GCE/子块遍历）、`NameSorterTest`
 
 ### 已实现
-- 主界面 / 设置页暗色 UI 复刻 + 桌面端布局复刻（顶栏折叠按钮 + logo + 图标、搜索框独立一行、标签行、左侧常驻分组树侧栏 `rv_sidebar` 默认收起）
+- 主界面 / 设置页暗色 UI 复刻 + 桌面端布局复刻（顶栏折叠按钮 + logo + 图标、搜索框独立一行、标签行、左侧分组树抽屉侧栏 `rv_sidebar` 默认收起、展开时覆盖网格）
 - 存储层：路径、SQLite 数据库、JSON 配置 + 密钥加密
 - 缓存扫描、SAF 导入（20MiB/2560px 上限，ImportOutcome/ImportResult 汇总）、缩略图生成
 - 主界面下拉刷新：`activity_main.xml` 的 `swipe_refresh`（SwipeRefreshLayout）包住网格 RecyclerView（空状态/整理底栏仍为兄弟层），`MainActivity.setupSwipeRefresh` 绑定监听 → `rescanCache(pullRefresh=true)` 复用缓存扫描 + `reloadData`，回主线程收起指示器；「更多」菜单已移除刷新项，仅保留上传/下载
@@ -313,8 +313,6 @@ Android/data/com.ohmymeme.app/
 - 版本更新检查（GitHub Releases API，列表路径跳过 draft/prerelease/nightly/beta/rc 只推正式版；24h TTL 启动自动检查）
 - GIF 动图播放（`auto_play_gif` 开关控制，WebP 动图亦支持）
 - 长按右键菜单（重命名/收藏/打标签/添加分组（两段式）/从最近使用中删除/删除）
-- 表情网格间距（卡片 5dp 外边距）
-- 更新下载镜像源回退（github.dpik.top 等 4 个镜像 + 直连）
 - 云端同步（FTP/S3/R2/WebDAV + meme-index.json 清单 push/pull/test/status/清理云端孤儿；S3 兼容阿里云 OSS：V2 签名 + 虚拟主机寻址，设置页可切换 V4/AWS 标准）；同步清单可分别关闭标签/分组/收藏写入（关闭标签或分组前弹确认框）；WebDAV 测试连接遇自签名证书弹「服务器证书不受信任」确认，继续则保存 `webdav_allow_insecure=true` 并重试，设置页可随时关闭该开关
 - 最近使用记录：点击网格卡片 `recordUse` 记入 recent_uses（受 `record_recent_use` 开关控制），最近使用分组自动刷新
 - 启动自动同步：MainActivity 启动读 `sync_auto_sync`/`sync_auto_fetch_index` 配置，后台执行 pull/checkSyncStatus
