@@ -146,6 +146,10 @@ Android/data/com.ohmymeme.app/
 - **下载遮罩与退场动画**：整卡 `cloud_mask`（`bg_cloud_mask` 半透明黑 8dp 圆角 + 「下载中…」，`item_meme.xml` 置于最顶层）；下载状态存 `MemeGridAdapter` 伴生对象 `downloadingIds`（跨 reloadData 重建 adapter 不丢，bind 时按 `meme.cloud && downloadingIds.contains(id)` 显隐并 `clipBounds=null` 复位）；`setDownloading(id, active)` 增删 + `notifyItemChanged`，`wipeDownloadingMask(id, onWiped)` 用 `ValueAnimator` 驱动 `clipBounds = Rect(0, top, w, h)` 自上而下 0.40s 擦除退场（holder 不可见时直接回调），动画结束清状态并回调 MainActivity 刷新+分享；下载失败即时摘遮罩
 - 卡片主体的长按回调 `onLongClick` 由 MainActivity 弹 PopupMenu；主体点击继续分享
 
+### 网格刷新与滚动保持（MainActivity.reloadData）
+- 视图标识 `keyword|collectionId|tags|sortOrder` 未变说明只是数据刷新，用 `ScrollAnchor`（首可见行表情 id + 相对内容区顶端偏移）复位滚动；变化（切筛选/排序）才回顶部。重建 adapter 会丢滚动状态，须 `scrollToPositionWithOffset` 复位，id 已删除时退回行号
+- 点击卡片分享只在最近使用视图（顺序会变）或侧栏可见（计数刷新）时触发刷新，其余视图不重载，避免打断滚动与延迟分享面板
+
 ### 长按右键菜单（MainActivity.kt）
 - `menu/menu_meme.xml`：重命名 / 收藏（标题随状态切换）/ 打标签 / 添加分组 / 加入小分组（仅查看具体分组时显示）/ 从分组移除 / 从最近使用中删除 / 删除（红），对齐桌面端 webui 右键菜单
 - 「添加分组」走两段式 `promptAddCollection`（对齐桌面端 CollectionBuilder 的精简版）：`dialog_add_collection.xml` 输入新分组名创建，或从「加入已有分组」列表（仅 id>0 真实分组，`item_add_collection_row.xml`）点选即加入
@@ -345,4 +349,3 @@ Android/data/com.ohmymeme.app/
 - 长按拖拽发送（相册式）：`MemeGridAdapter` 长按卡片直接回调 `onDragStart` → `MainActivity.startGlobalDrag`：`materializeDragFile`（SAF 先 `stor.copyTo(cacheDir)` 物化，统一临时文件路径）→ `FileProvider.getUriForFile` → `ClipData.newUri` → `itemView.startDragAndDrop(DRAG_FLAG_GLOBAL or DRAG_FLAG_GLOBAL_URI_READ)` 跨应用拖入微信/QQ，同时 `recordUse`；`ACTION_DRAG_ENDED` 且未被接收（`!e.result`）时回调 `onDragFailed` 弹原右键菜单兜底；卡片右上角 `btn_meme_menu`（「⋯」）点击回调 `onMenuClick` 打开 `showMemeMenu`；注意鸿蒙/Huawei 上 `TYPE_APPLICATION_OVERLAY` 无法发起全局拖拽，因此拖拽必须由 Activity 窗口内的视图发起（曾用悬浮窗方案失败后改为相册式）；跨应用拖拽需真机验证（接收方是否支持图片拖放，失败有菜单兜底）
 - 云端直接使用（`cloud_direct`，默认开）：`ConfigStore` 新增 `cloud_direct`/`cloud_thumb_auto_push`，`Meme.kt` 新增 `cloud` 字段；`MainActivity.startCloudDirect` 启动先用清单缓存合并渲染云行（`reloadData` 默认视图走 `mergeCloudOrder`），后台刷新 `cloud-index.json` 清单重载，`syncExecutor` 依次预取云端缩略图与补传本地缩略图；点击云卡片 `downloadCloudMeme` 下载（先 `setDownloading` 显示整卡 `cloud_mask` 遮罩防重复点击）→ SHA-256/大小/尺寸校验 → 按清单文件名入库 → 后补标签/分组/收藏 → 成功经 `wipeDownloadingMask` 遮罩自上而下退场动画后刷新网格并自动走分享链路（失败即时摘遮罩）；长按云卡片/菜单/整理模式勾选/拖拽排序持久化均过滤负 id 云行（`id > 0`），设置页两个开关 + 首配存储类型「开启/关闭」确认弹窗；单测 `CloudDirectTest`（8 例：合并顺序、差集安全校验、标签/分组/收藏回填、负 id、清单序、sha 校验、默认键）
 - 从手机QQ缓存导入（Shizuku）：导入菜单第三项从占位 Toast 改为完整链路 —— Shizuku 权限三态（`ShizukuBridge`）→ 扫描候选根（`QqCacheImporter.scan`，QQ_Favorite/chatpic/表情缓存，跳过 `.nomedia`）→ 目录/文件双栏可视化勾选（`dialog_qq_import.xml`：搜索、全选/清空、目录已选计数）→「导入」入表情库或「转存到…」SAF 写入用户所选目录，进度复用共享 `SyncProgressDialog`
-- `.nomedia` 数据目录标记（`StoragePaths.ensureNomedia`）：启动/改存储位置/恢复备份/向导选目录后在自有目录写空 `.nomedia`，阻止媒体库扫描表情缓存；同步上传以数据库驱动不会上传该文件

@@ -67,6 +67,8 @@ class MainActivity : AppCompatActivity() {
     private val syncTransferHandler = Handler(Looper.getMainLooper())
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
+    /** 上次渲染网格时的视图标识，相同则说明只是数据刷新，需要保持滚动位置 */
+    private var renderedViewKey: String? = null
     private var qqExportEntries: List<QqCacheImporter.Entry> = emptyList()
     private var sidebarSwipeActive = false
     private var sidebarSwipeClosing = false
@@ -1092,6 +1094,7 @@ class MainActivity : AppCompatActivity() {
         val keyword = currentKeyword
         val collectionId = activeCollectionId
         val tags = activeTags.toList()
+        val viewKey = "$keyword|$collectionId|${tags.sorted()}|$sortOrder"
         latestReloadId += 1
         val reloadId = latestReloadId
         executor.execute {
@@ -1146,7 +1149,12 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
-                    rv.layoutManager = GridLayoutManager(this, 3)
+                    // 过滤条件未变说明只是数据刷新（记录最近使用/改名/收藏等），保留滚动位置；
+                    // 过滤条件变化才回到顶部。重建 adapter 会丢弃 RecyclerView 的滚动状态，必须手动复位。
+                    val pinned = if (viewKey == renderedViewKey) rv.scrollAnchor() else null
+                    if ((rv.layoutManager as? GridLayoutManager)?.spanCount != 3) {
+                        rv.layoutManager = GridLayoutManager(this, 3)
+                    }
                     rv.setPadding(12, 12, 12, if (manageMode) 76 else 12)
                     (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
                     rv.setTag(R.id.tag_sort_helper, null)
@@ -1159,6 +1167,8 @@ class MainActivity : AppCompatActivity() {
                         onDragFailed = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                     rv.adapter = adapter
+                    pinned?.let { rv.restoreScrollAnchor(it, adapter) }
+                    renderedViewKey = viewKey
                     val helper = ItemTouchHelper(SortCallback(adapter, collectionId))
                     adapter.onReorderStart = { holder -> helper.startDrag(holder) }
                     helper.attachToRecyclerView(rv)
@@ -1168,6 +1178,29 @@ class MainActivity : AppCompatActivity() {
                     if (rows.isEmpty()) View.VISIBLE else View.GONE
             }
         }
+    }
+
+    /**
+     * 重建 adapter 后复位滚动用的锚点：优先按表情 id 找回同一张卡片，
+     * id 已不存在（被删除）时退回行号，保证插入/删除后视口不移动。
+     */
+    private data class ScrollAnchor(val position: Int, val offset: Int, val memeId: Long)
+
+    private fun RecyclerView.scrollAnchor(): ScrollAnchor? {
+        val lm = layoutManager as? GridLayoutManager ?: return null
+        val pos = lm.findFirstVisibleItemPosition()
+        if (pos == RecyclerView.NO_POSITION) return null
+        val view = lm.findViewByPosition(pos) ?: return null
+        val memeId = (adapter as? MemeGridAdapter)?.itemAt(pos)?.id ?: 0L
+        return ScrollAnchor(pos, view.top - paddingTop, memeId)
+    }
+
+    private fun RecyclerView.restoreScrollAnchor(anchor: ScrollAnchor, adapter: MemeGridAdapter) {
+        if (adapter.itemCount <= 0) return
+        val lm = layoutManager as? GridLayoutManager ?: return
+        val byId = if (anchor.memeId != 0L) adapter.positionOfId(anchor.memeId) else -1
+        val pos = if (byId >= 0) byId else anchor.position.coerceIn(0, adapter.itemCount - 1)
+        lm.scrollToPositionWithOffset(pos, anchor.offset)
     }
 
     private fun showMemeMenu(anchor: View, meme: Meme) {
@@ -1488,12 +1521,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun recordUse(meme: Meme) {
         if (!ConfigStore.get(this).optBoolean("record_recent_use", true)) return
+        // 只有依赖最近使用的视图才需要重建网格（顺序/内容会变）。
+        // 其余视图点卡片后不刷新，避免重建 adapter 打断滚动、闪缩略图、延迟分享面板。
+        val inRecentView = activeCollectionId == COLLECTION_RECENT
+        val refreshSidebar = findViewById<View>(R.id.rv_sidebar).isShown
         executor.execute {
             MemeDb.get(this).recordUse(meme.id)
-            val recentEmpty = activeCollectionId == COLLECTION_RECENT && MemeDb.get(this).getRecent(1).isEmpty()
+            val recentEmpty = inRecentView && MemeDb.get(this).getRecent(1).isEmpty()
             runOnUiThread {
                 if (recentEmpty) activeCollectionId = null
-                reloadData()
+                when {
+                    inRecentView || recentEmpty -> reloadData()
+                    refreshSidebar -> reloadBars()
+                }
             }
         }
     }
