@@ -67,6 +67,10 @@ class MainActivity : AppCompatActivity() {
     private val syncTransferHandler = Handler(Looper.getMainLooper())
     private val selectedIds = mutableSetOf<Long>()
     private var latestReloadId = 0L
+    /** 上次渲染网格时的视图标识，相同则说明只是数据刷新，需要保持滚动位置 */
+    private var renderedViewKey: String? = null
+    /** 侧栏收起期间记录过最近使用，展开时需补刷一次计数 */
+    private var sidebarBarsDirty = false
     private var qqExportEntries: List<QqCacheImporter.Entry> = emptyList()
     private var sidebarSwipeActive = false
     private var sidebarSwipeClosing = false
@@ -642,6 +646,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        sidebarBarsDirty = false
     }
 
     private fun toggleSidebar() {
@@ -650,6 +655,8 @@ class MainActivity : AppCompatActivity() {
         rv.visibility = if (open) View.VISIBLE else View.GONE
         findViewById<ImageView>(R.id.btn_sidebar)
             .setImageResource(if (open) R.drawable.ic_close else R.drawable.ic_sidebar)
+        // 收起期间记录过最近使用，展开时补刷计数，避免侧栏停在旧值
+        if (open && sidebarBarsDirty) reloadBars()
     }
 
     /** 边缘右滑打开侧栏 / 侧栏内左滑关闭（对齐桌面端侧栏条滑动手势），仅观察不拦截子视图 */
@@ -1087,11 +1094,25 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun reloadData() {
+    /**
+     * 当前视图的身份：关键词/分组/标签/排序都参与，用于区分「数据刷新」与「换视图」。
+     * 标签按 `长度:内容` 逐条拼接（netstring 风格），避免单个标签 `a, b` 与 `a`+`b` 编码后相同。
+     */
+    private fun viewKeyOf(keyword: String, collectionId: Long?, tags: List<String>): String {
+        val key = StringBuilder()
+        key.append(keyword.length).append(':').append(keyword).append('|')
+        key.append(collectionId ?: "none").append('|')
+        tags.sorted().forEach { key.append(it.length).append(':').append(it) }
+        key.append('|').append(sortOrder)
+        return key.toString()
+    }
+
+    private fun reloadData(anchorSkipFilename: String? = null) {
         reloadBars()
         val keyword = currentKeyword
         val collectionId = activeCollectionId
         val tags = activeTags.toList()
+        val viewKey = viewKeyOf(keyword, collectionId, tags)
         latestReloadId += 1
         val reloadId = latestReloadId
         executor.execute {
@@ -1146,7 +1167,12 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (reloadId != latestReloadId) return@runOnUiThread
                 findViewById<RecyclerView>(R.id.rv_memes).let { rv ->
-                    rv.layoutManager = GridLayoutManager(this, 3)
+                    // 过滤条件未变说明只是数据刷新（记录最近使用/改名/收藏等），保留滚动位置；
+                    // 过滤条件变化才回到顶部。重建 adapter 会丢弃 RecyclerView 的滚动状态，必须手动复位。
+                    val pinned = if (viewKey == renderedViewKey) rv.scrollAnchor(anchorSkipFilename) else null
+                    if ((rv.layoutManager as? GridLayoutManager)?.spanCount != 3) {
+                        rv.layoutManager = GridLayoutManager(this, 3)
+                    }
                     rv.setPadding(12, 12, 12, if (manageMode) 76 else 12)
                     (rv.getTag(R.id.tag_sort_helper) as? ItemTouchHelper)?.attachToRecyclerView(null)
                     rv.setTag(R.id.tag_sort_helper, null)
@@ -1159,6 +1185,8 @@ class MainActivity : AppCompatActivity() {
                         onDragFailed = { anchor, meme -> showMemeMenu(anchor, meme) }
                     }
                     rv.adapter = adapter
+                    pinned?.let { rv.restoreScrollAnchor(it, adapter) }
+                    renderedViewKey = viewKey
                     val helper = ItemTouchHelper(SortCallback(adapter, collectionId))
                     adapter.onReorderStart = { holder -> helper.startDrag(holder) }
                     helper.attachToRecyclerView(rv)
@@ -1168,6 +1196,44 @@ class MainActivity : AppCompatActivity() {
                     if (rows.isEmpty()) View.VISIBLE else View.GONE
             }
         }
+    }
+
+    /**
+     * 重建 adapter 后复位滚动用的锚点：按文件名找回同一张卡片，
+     * 文件已被删除时退回行号，保证插入/删除后视口不移动。
+     * 云行的 id 由清单位置派生（清单增删一条就会整体错位），只有文件名稳定，故锚点不用 id。
+     */
+    private data class ScrollAnchor(val position: Int, val offset: Int, val filename: String)
+
+    /**
+     * 取首屏可见行的锚点。`skipFilename` 用于最近使用视图：被点击的表情会移到第一位，
+     * 拿它当锚点会得到位置 0 且负偏移无法生效（回弹到顶部），改为锚定另一张未移动的可见卡片。
+     */
+    private fun RecyclerView.scrollAnchor(skipFilename: String? = null): ScrollAnchor? {
+        val lm = layoutManager as? GridLayoutManager ?: return null
+        val grid = adapter as? MemeGridAdapter ?: return null
+        val first = lm.findFirstVisibleItemPosition()
+        if (first == RecyclerView.NO_POSITION) return null
+        var index = first
+        while (index <= lm.findLastVisibleItemPosition()) {
+            val item = grid.itemAt(index)
+            if (item != null && item.filename != skipFilename) {
+                val view = lm.findViewByPosition(index) ?: return null
+                return ScrollAnchor(index, view.top - paddingTop, item.filename)
+            }
+            index++
+        }
+        // 可见范围内只剩被跳过的那一行：退回行号锚点
+        val view = lm.findViewByPosition(first) ?: return null
+        return ScrollAnchor(first, view.top - paddingTop, "")
+    }
+
+    private fun RecyclerView.restoreScrollAnchor(anchor: ScrollAnchor, adapter: MemeGridAdapter) {
+        if (adapter.itemCount <= 0) return
+        val lm = layoutManager as? GridLayoutManager ?: return
+        val byName = if (anchor.filename.isNotEmpty()) adapter.positionOfFilename(anchor.filename) else -1
+        val pos = if (byName >= 0) byName else anchor.position.coerceIn(0, adapter.itemCount - 1)
+        lm.scrollToPositionWithOffset(pos, anchor.offset)
     }
 
     private fun showMemeMenu(anchor: View, meme: Meme) {
@@ -1488,12 +1554,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun recordUse(meme: Meme) {
         if (!ConfigStore.get(this).optBoolean("record_recent_use", true)) return
+        // 只有依赖最近使用的视图才需要重建网格（顺序/内容会变）。
+        // 其余视图点卡片后不刷新，避免重建 adapter 打断滚动、闪缩略图、延迟分享面板。
+        val inRecentView = activeCollectionId == COLLECTION_RECENT
+        val refreshSidebar = findViewById<View>(R.id.rv_sidebar).isShown
         executor.execute {
             MemeDb.get(this).recordUse(meme.id)
-            val recentEmpty = activeCollectionId == COLLECTION_RECENT && MemeDb.get(this).getRecent(1).isEmpty()
+            val recentEmpty = inRecentView && MemeDb.get(this).getRecent(1).isEmpty()
             runOnUiThread {
                 if (recentEmpty) activeCollectionId = null
-                reloadData()
+                when {
+                    // 被点击的表情会移到最近使用首位，锚点须跳过它，改用其它未移动的可见卡片
+                    inRecentView -> reloadData(anchorSkipFilename = meme.filename)
+                    refreshSidebar -> reloadBars()
+                    // 侧栏收起时看不到计数：记脏，展开时再补刷新
+                    else -> sidebarBarsDirty = true
+                }
             }
         }
     }

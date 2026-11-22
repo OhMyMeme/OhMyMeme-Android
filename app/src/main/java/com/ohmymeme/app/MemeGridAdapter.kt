@@ -50,6 +50,11 @@ class MemeGridAdapter(
 
     fun itemsByIds(ids: Collection<Long>): List<Meme> = items.filter { ids.contains(it.id) }
 
+    fun itemAt(position: Int): Meme? = items.getOrNull(position)
+
+    fun positionOfFilename(filename: String): Int =
+        items.indexOfFirst { it.filename == filename }
+
     /** 云端下载状态用伴生对象，跨 adapter 实例（reloadData 重建）保持遮罩与防连点 */
     fun setDownloading(id: Long, active: Boolean) {
         if (active) downloadingIds.add(id) else downloadingIds.remove(id)
