@@ -1,5 +1,8 @@
 package com.ohmymeme.app
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.Intent
@@ -26,6 +29,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.animation.PathInterpolator
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.EditText
@@ -73,6 +77,8 @@ class MainActivity : AppCompatActivity() {
     private var sidebarSwipeConsumeUp = false
     private var sidebarSwipeX = 0f
     private var sidebarSwipeY = 0f
+    private var sidebarOpen = false
+    private var sidebarAnimator: ValueAnimator? = null
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
@@ -80,6 +86,11 @@ class MainActivity : AppCompatActivity() {
         private const val COLLECTION_UNCATEGORIZED = -4L
         private const val EDGE_SWIPE_START_DP = 16
         private const val EDGE_SWIPE_DISTANCE_DP = 64
+        // 侧栏宽度 = 内容区宽 × 0.55/(1+0.55)，与旧版 layout_weight 比例一致
+        private const val SIDEBAR_WIDTH_RATIO = 0.55f
+        private const val SIDEBAR_ANIM_MS = 180L
+        // 与桌面端 #sidebar 的 width 过渡曲线一致（cubic-bezier(0.2, 0.8, 0.2, 1)）
+        private val SIDEBAR_INTERPOLATOR = PathInterpolator(0.2f, 0.8f, 0.2f, 1f)
         private val SORT_MODES = setOf("manifest", "manifest_desc", "name_asc", "name_desc")
     }
 
@@ -553,6 +564,22 @@ class MainActivity : AppCompatActivity() {
             rv.layoutManager = LinearLayoutManager(this)
             rv.adapter = SidebarTreeAdapter(emptyList(), emptySet())
         }
+        // 屏幕宽度变化（旋转/分屏）后重算抽屉宽度
+        findViewById<View>(R.id.content_root).addOnLayoutChangeListener { _, l, _, r, _, ol, _, or, _ ->
+            if (r - l != or - ol) applySidebarWidth()
+        }
+        applySidebarWidth()
+        findViewById<View>(R.id.sidebar_scrim).setOnClickListener { animateSidebar(false) }
+    }
+
+    private fun applySidebarWidth() {
+        val total = findViewById<View>(R.id.content_root).width
+        val base = if (total > 0) total else resources.displayMetrics.widthPixels
+        val width = (base * SIDEBAR_WIDTH_RATIO / (1f + SIDEBAR_WIDTH_RATIO)).toInt()
+        val panel = findViewById<View>(R.id.sidebar_panel)
+        if (panel.layoutParams.width != width) {
+            panel.layoutParams = panel.layoutParams.apply { this.width = width }
+        }
     }
 
     private fun reloadBars() {
@@ -644,12 +671,71 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleSidebar() {
-        val rv = findViewById<RecyclerView>(R.id.rv_sidebar)
-        val open = rv.visibility != View.VISIBLE
-        rv.visibility = if (open) View.VISIBLE else View.GONE
+    private fun toggleSidebar() = animateSidebar(!sidebarOpen)
+
+    /**
+     * 侧栏开合过渡：抽屉式纯位移 + 遮罩淡入，不改任何布局尺寸。
+     * 早期版本用 layout_weight 连续插值，会让网格 RecyclerView 每帧重新测量布局
+     * （3 列 ConstraintLayout 卡片 + clipToOutline + 文本测量），真机单帧超出 16ms 掉帧；
+     * 改为 translationX 后网格不再重排，动画只走渲染层位移。
+     */
+    private fun animateSidebar(opening: Boolean) {
+        val panel = findViewById<View>(R.id.sidebar_panel)
+        val scrim = findViewById<View>(R.id.sidebar_scrim)
+        sidebarOpen = opening
         findViewById<ImageView>(R.id.btn_sidebar)
-            .setImageResource(if (open) R.drawable.ic_close else R.drawable.ic_sidebar)
+            .setImageResource(if (opening) R.drawable.ic_close else R.drawable.ic_sidebar)
+        applySidebarWidth()
+        val width = panel.layoutParams.width
+        val offscreen = -width.toFloat()
+        val fromX = if (panel.visibility == View.VISIBLE) panel.translationX else offscreen
+        val toX = if (opening) 0f else offscreen
+        val fromAlpha = if (scrim.visibility == View.VISIBLE) scrim.alpha else 0f
+        val toAlpha = if (opening) 1f else 0f
+        sidebarAnimator?.cancel()
+        sidebarAnimator = null
+        if (opening) {
+            scrim.visibility = View.VISIBLE
+            panel.visibility = View.VISIBLE
+            scrim.alpha = fromAlpha
+            panel.translationX = fromX
+        }
+        val progress = if (width > 0) abs(fromX - toX) / width.toFloat() else 0f
+        if (progress < 0.01f) {
+            finishSidebar(opening)
+            return
+        }
+        val animator = ValueAnimator.ofFloat(0f, 1f)
+        animator.duration = (SIDEBAR_ANIM_MS * progress).toLong().coerceIn(60L, SIDEBAR_ANIM_MS)
+        animator.interpolator = SIDEBAR_INTERPOLATOR
+        animator.addUpdateListener { anim ->
+            val fraction = anim.animatedValue as Float
+            panel.translationX = fromX + (toX - fromX) * fraction
+            scrim.alpha = fromAlpha + (toAlpha - fromAlpha) * fraction
+        }
+        animator.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                if (sidebarAnimator !== animation) return
+                sidebarAnimator = null
+                finishSidebar(opening)
+            }
+        })
+        sidebarAnimator = animator
+        animator.start()
+    }
+
+    private fun finishSidebar(opening: Boolean) {
+        val panel = findViewById<View>(R.id.sidebar_panel)
+        val scrim = findViewById<View>(R.id.sidebar_scrim)
+        if (opening) {
+            panel.translationX = 0f
+            scrim.alpha = 1f
+        } else {
+            panel.visibility = View.GONE
+            panel.translationX = 0f
+            scrim.visibility = View.GONE
+            scrim.alpha = 0f
+        }
     }
 
     /** 边缘右滑打开侧栏 / 侧栏内左滑关闭（对齐桌面端侧栏条滑动手势），仅观察不拦截子视图 */
@@ -661,13 +747,13 @@ class MainActivity : AppCompatActivity() {
     private fun detectSidebarSwipe(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                val sidebar = findViewById<RecyclerView>(R.id.rv_sidebar)
-                sidebarSwipeClosing = sidebar.visibility == View.VISIBLE
+                val panel = findViewById<View>(R.id.sidebar_panel)
+                sidebarSwipeClosing = sidebarOpen
                 sidebarSwipeConsumeUp = false
                 val loc = IntArray(2)
                 if (sidebarSwipeClosing) {
-                    sidebar.getLocationInWindow(loc)
-                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + sidebar.width
+                    panel.getLocationInWindow(loc)
+                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + panel.width
                 } else {
                     findViewById<View>(android.R.id.content).getLocationInWindow(loc)
                     sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + dp(EDGE_SWIPE_START_DP)

@@ -192,28 +192,15 @@
         android:paddingEnd="16dp"
         android:paddingBottom="2dp" />
 
-    <LinearLayout
+    <FrameLayout
+        android:id="@+id/content_root"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="horizontal">
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/rv_sidebar"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.55"
-            android:background="@color/surface"
-            android:clipToPadding="false"
-            android:overScrollMode="never"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:visibility="gone" />
+        android:layout_weight="1">
 
         <FrameLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1">
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
 
             <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
                 android:id="@+id/swipe_refresh"
@@ -357,5 +344,34 @@
                     android:textSize="12.5sp" />
             </LinearLayout>
         </FrameLayout>
-    </LinearLayout>
+
+        <View
+            android:id="@+id/sidebar_scrim"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/scrim"
+            android:clickable="true"
+            android:focusable="true"
+            android:importantForAccessibility="no"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/sidebar_panel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="start"
+            android:background="@drawable/bg_sidebar_panel"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_sidebar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:overScrollMode="never"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp" />
+        </LinearLayout>
+    </FrameLayout>
 </LinearLayout>
