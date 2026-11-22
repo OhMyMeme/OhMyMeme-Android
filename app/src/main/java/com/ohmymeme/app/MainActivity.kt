@@ -79,6 +79,9 @@ class MainActivity : AppCompatActivity() {
     private var sidebarSwipeY = 0f
     private var sidebarOpen = false
     private var sidebarAnimator: ValueAnimator? = null
+    // 抽屉当前位移比例：0 = 完全展开，1 = 完全收起。按比例而非像素记录，
+    // 宽度变化（旋转/分屏）时动画无需按旧坐标重算，直接按新宽度换算位移。
+    private var sidebarOffset = 1f
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
@@ -577,9 +580,26 @@ class MainActivity : AppCompatActivity() {
         val base = if (total > 0) total else resources.displayMetrics.widthPixels
         val width = (base * SIDEBAR_WIDTH_RATIO / (1f + SIDEBAR_WIDTH_RATIO)).toInt()
         val panel = findViewById<View>(R.id.sidebar_panel)
-        if (panel.layoutParams.width != width) {
-            panel.layoutParams = panel.layoutParams.apply { this.width = width }
-        }
+        if (panel.layoutParams.width == width) return
+        panel.layoutParams = panel.layoutParams.apply { this.width = width }
+        // 动画期间宽度变化：按新宽度立即重算当前帧位移，避免沿用旧宽度坐标而跳变或停半路
+        if (sidebarAnimator != null) applySidebarOffset(sidebarOffset)
+    }
+
+    private fun isLayoutRtl(): Boolean =
+        resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
+
+    /** 收起态位移：面板在 `layout_gravity="start"` 侧，LTR 向左移出、RTL 向右移出 */
+    private fun sidebarOffscreen(width: Int): Float =
+        if (isLayoutRtl()) width.toFloat() else -width.toFloat()
+
+    private fun applySidebarOffset(fraction: Float) {
+        val panel = findViewById<View>(R.id.sidebar_panel)
+        val scrim = findViewById<View>(R.id.sidebar_scrim)
+        val f = fraction.coerceIn(0f, 1f)
+        sidebarOffset = f
+        panel.translationX = sidebarOffscreen(panel.layoutParams.width) * f
+        scrim.alpha = 1f - f
     }
 
     private fun reloadBars() {
@@ -686,33 +706,28 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.btn_sidebar)
             .setImageResource(if (opening) R.drawable.ic_close else R.drawable.ic_sidebar)
         applySidebarWidth()
-        val width = panel.layoutParams.width
-        val offscreen = -width.toFloat()
-        val fromX = if (panel.visibility == View.VISIBLE) panel.translationX else offscreen
-        val toX = if (opening) 0f else offscreen
-        val fromAlpha = if (scrim.visibility == View.VISIBLE) scrim.alpha else 0f
-        val toAlpha = if (opening) 1f else 0f
-        sidebarAnimator?.cancel()
+        // 先清引用再取消：ValueAnimator.cancel() 同步回调 onAnimationEnd，
+        // 若引用仍在，旧回调会通过身份检查并 finish，提前掐掉刚起的过渡
+        val previousAnimator = sidebarAnimator
         sidebarAnimator = null
+        previousAnimator?.cancel()
         if (opening) {
             scrim.visibility = View.VISIBLE
             panel.visibility = View.VISIBLE
-            scrim.alpha = fromAlpha
-            panel.translationX = fromX
         }
-        val progress = if (width > 0) abs(fromX - toX) / width.toFloat() else 0f
+        val from = sidebarOffset
+        val to = if (opening) 0f else 1f
+        // 先摆到当前比例位置，避免面板刚可见时闪一帧展开态
+        applySidebarOffset(from)
+        val progress = abs(to - from)
         if (progress < 0.01f) {
             finishSidebar(opening)
             return
         }
-        val animator = ValueAnimator.ofFloat(0f, 1f)
+        val animator = ValueAnimator.ofFloat(from, to)
         animator.duration = (SIDEBAR_ANIM_MS * progress).toLong().coerceIn(60L, SIDEBAR_ANIM_MS)
         animator.interpolator = SIDEBAR_INTERPOLATOR
-        animator.addUpdateListener { anim ->
-            val fraction = anim.animatedValue as Float
-            panel.translationX = fromX + (toX - fromX) * fraction
-            scrim.alpha = fromAlpha + (toAlpha - fromAlpha) * fraction
-        }
+        animator.addUpdateListener { anim -> applySidebarOffset(anim.animatedValue as Float) }
         animator.addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: Animator) {
                 if (sidebarAnimator !== animation) return
@@ -728,9 +743,9 @@ class MainActivity : AppCompatActivity() {
         val panel = findViewById<View>(R.id.sidebar_panel)
         val scrim = findViewById<View>(R.id.sidebar_scrim)
         if (opening) {
-            panel.translationX = 0f
-            scrim.alpha = 1f
+            applySidebarOffset(0f)
         } else {
+            applySidebarOffset(1f)
             panel.visibility = View.GONE
             panel.translationX = 0f
             scrim.visibility = View.GONE
@@ -745,6 +760,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun detectSidebarSwipe(ev: MotionEvent): Boolean {
+        val rtl = isLayoutRtl()
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val panel = findViewById<View>(R.id.sidebar_panel)
@@ -755,8 +771,16 @@ class MainActivity : AppCompatActivity() {
                     panel.getLocationInWindow(loc)
                     sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + panel.width
                 } else {
-                    findViewById<View>(android.R.id.content).getLocationInWindow(loc)
-                    sidebarSwipeActive = ev.x >= loc[0] && ev.x <= loc[0] + dp(EDGE_SWIPE_START_DP)
+                    // 收起态从 start 边向内滑：LTR 左缘 / RTL 右缘
+                    val root = findViewById<View>(android.R.id.content)
+                    root.getLocationInWindow(loc)
+                    val edge = dp(EDGE_SWIPE_START_DP)
+                    sidebarSwipeActive = if (rtl) {
+                        val right = loc[0] + root.width
+                        ev.x >= right - edge && ev.x <= right
+                    } else {
+                        ev.x >= loc[0] && ev.x <= loc[0] + edge
+                    }
                 }
                 sidebarSwipeX = ev.x
                 sidebarSwipeY = ev.y
@@ -766,9 +790,10 @@ class MainActivity : AppCompatActivity() {
                 if (sidebarSwipeActive) {
                     val dx = ev.x - sidebarSwipeX
                     val dy = ev.y - sidebarSwipeY
-                    if (abs(dx) >= dp(EDGE_SWIPE_DISTANCE_DP) && abs(dx) > abs(dy) &&
-                        ((sidebarSwipeClosing && dx < 0) || (!sidebarSwipeClosing && dx > 0))
-                    ) {
+                    // 展开朝 end 边滑（LTR 右 / RTL 左），收起朝 start 边滑，方向相反
+                    val openSign = if (rtl) -1f else 1f
+                    val want = if (sidebarSwipeClosing) -openSign else openSign
+                    if (abs(dx) >= dp(EDGE_SWIPE_DISTANCE_DP) && abs(dx) > abs(dy) && dx * want > 0) {
                         sidebarSwipeActive = false
                         sidebarSwipeConsumeUp = true
                         toggleSidebar()
