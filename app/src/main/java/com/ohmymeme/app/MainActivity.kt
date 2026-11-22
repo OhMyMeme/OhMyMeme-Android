@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -82,6 +83,12 @@ class MainActivity : AppCompatActivity() {
     // 抽屉当前位移比例：0 = 完全展开，1 = 完全收起。按比例而非像素记录，
     // 宽度变化（旋转/分屏）时动画无需按旧坐标重算，直接按新宽度换算位移。
     private var sidebarOffset = 1f
+    /** 抽屉打开时系统返回键先收起抽屉，不直接退出主界面 */
+    private val sidebarBackCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (sidebarOpen) animateSidebar(false)
+        }
+    }
 
     companion object {
         private const val COLLECTION_FAVORITES = -2L
@@ -140,6 +147,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        onBackPressedDispatcher.addCallback(this, sidebarBackCallback)
         Shizuku.addRequestPermissionResultListener(qqPermissionListener)
 
         setupLogo()
@@ -703,6 +711,7 @@ class MainActivity : AppCompatActivity() {
         val panel = findViewById<View>(R.id.sidebar_panel)
         val scrim = findViewById<View>(R.id.sidebar_scrim)
         sidebarOpen = opening
+        sidebarBackCallback.isEnabled = opening
         findViewById<ImageView>(R.id.btn_sidebar)
             .setImageResource(if (opening) R.drawable.ic_close else R.drawable.ic_sidebar)
         applySidebarWidth()
